@@ -1261,7 +1261,7 @@ void mlir::triton::populateLinalgToX86ConversionPatterns(
   patterns.add<BitcastConverter>(patterns.getContext());
   patterns.add<AssertConverter>(patterns.getContext());
   patterns.add<MatmulConverter>(patterns.getContext());
-  patterns.add<LinalgFillToLLVMConverter>(patterns.getContext());
+  patterns.add<SplatConverter>(patterns.getContext());
   patterns.add<ReduceConverter>(patterns.getContext());
   patterns.add<DenseConstantConverter>(patterns.getContext());
   patterns.add<UnrealizedCastConverter>(patterns.getContext());

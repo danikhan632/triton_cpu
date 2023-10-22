@@ -146,3 +146,6 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 
 /home/green/code/triton/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt /home/green/code/triton/third_party/triton_shared/test/Conversion/TritonToLinalg/addptr_2d_example.mlir
+
+export CPU_TRITON=1
+clear && python3.11 -m pip install -e . 
