@@ -9,7 +9,7 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 
 #include "triton-shared/Conversion/TritonToLinalg/Passes.h"
-#include "triton-shared/Conversion/LinalgToX86/Passes.h"
+#include "triton-shared/Conversion/LinalgTollvm/Passes.h"
 
 
 #include "mlir/InitAllPasses.h"
@@ -32,7 +32,7 @@ inline void registerTritonSharedDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestMembarPass();
   mlir::triton::registerTritonToLinalgPass();
-  mlir::triton::registerLinalgToX86Pass();
+  mlir::triton::registerLinalgTollvmPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
 

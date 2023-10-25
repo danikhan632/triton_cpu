@@ -5,16 +5,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LINALG_TO_X86_CONVERSION_PASSES_H
-#define LINALG_TO_X86_CONVERSION_PASSES_H
+#ifndef LINALG_TO_llvm_CONVERSION_PASSES_H
+#define LINALG_TO_llvm_CONVERSION_PASSES_H
 
-#include "triton-shared/Conversion/LinalgToX86/LinalgToX86.h"
+#include "triton-shared/Conversion/LinalgTollvm/LinalgTollvm.h"
 
 namespace mlir {
 namespace triton {
 
 #define GEN_PASS_REGISTRATION
-#include "triton-shared/Conversion/LinalgToX86/Passes.h.inc"
+#include "triton-shared/Conversion/LinalgTollvm/Passes.h.inc"
 
 } // namespace triton
 } // namespace mlir

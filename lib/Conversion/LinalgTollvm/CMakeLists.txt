@@ -4,12 +4,12 @@
 #
 #===------------------------------------------------------------------------===#
 
-add_mlir_conversion_library(LinalgToX86
-  LinalgToX86.cpp
-  LinalgToX86Pass.cpp
+add_mlir_conversion_library(LinalgTollvm
+  LinalgTollvm.cpp
+  LinalgTollvmPass.cpp
 
   DEPENDS
-  LinalgToX86ConversionPassIncGen
+  LinalgTollvmConversionPassIncGen
 
   LINK_COMPONENTS
   Core

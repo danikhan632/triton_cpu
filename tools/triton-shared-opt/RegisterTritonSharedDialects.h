@@ -9,7 +9,7 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 
 #include "triton-shared/Conversion/TritonToLinalg/Passes.h"
-#include "triton-shared/Conversion/LinalgToX86/Passes.h"
+#include "triton-shared/Conversion/LinalgTollvm/Passes.h"
 
 
 #include "mlir/InitAllPasses.h"

@@ -3,7 +3,12 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/**"
+                "/home/green/code/triton/third_party/triton_shared/include/**",
+                "/home/green/code/triton/include/**",
+                "/home/green/.triton/llvm/llvm-b1115f8c-ubuntu-x64/include/**",
+                "/home/green/.triton/pybind11/pybind11-2.11.1/include/**"
+
+
             ],
             "defines": [],
             "compilerPath": "/home/linuxbrew/.linuxbrew/bin/clang",

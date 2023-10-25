@@ -5,11 +5,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef TRITON_CONVERSION_LINALG_TO_X86__LINALG_TO_X86_H
-#define TRITON_CONVERSION_LINALG_TO_X86_LINALG_TO_X86_H
+#ifndef TRITON_CONVERSION_LINALG_TO_llvm__LINALG_TO_llvm_H
+#define TRITON_CONVERSION_LINALG_TO_llvm_LINALG_TO_llvm_H
 
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -18,16 +19,16 @@
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createLinalgToX86Pass();
+std::unique_ptr<OperationPass<ModuleOp>> createLinalgTollvmPass();
 
-void populateLinalgToX86CanonicalizationPatterns(
+void populateLinalgTollvmCanonicalizationPatterns(
     RewritePatternSet &patterns);
 
-void populateLinalgToX86ConversionPatterns(TypeConverter &typeConverter,
+void populateLinalgTollvmConversionPatterns(TypeConverter &typeConverter,
                                               RewritePatternSet &patterns,
                                               unsigned int launchGridRank);
 
 } // namespace triton
 } // namespace mlir
 
-#endif // TRITON_CONVERSION_LINALG_TO_X86_LINALG_TO_X86_H
+#endif // TRITON_CONVERSION_LINALG_TO_llvm_LINALG_TO_llvm_H

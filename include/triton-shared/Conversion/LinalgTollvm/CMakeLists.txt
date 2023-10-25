@@ -5,5 +5,5 @@
 #===------------------------------------------------------------------------===#
 
 set(LLVM_TARGET_DEFINITIONS Passes.td)
-mlir_tablegen(Passes.h.inc -gen-pass-decls --name LinalgToX86)
-add_public_tablegen_target(LinalgToX86ConversionPassIncGen)
+mlir_tablegen(Passes.h.inc -gen-pass-decls --name LinalgTollvm)
+add_public_tablegen_target(LinalgTollvmConversionPassIncGen)
