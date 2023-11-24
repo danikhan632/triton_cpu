@@ -1,3 +1,15 @@
+```bash
+TRITON_CODEGEN_TRITON_SHARED=1 python3.11 setup.py develop 
+https://hackgtstoragebucket.s3.amazonaws.com/llvm-b1115f8c-ubuntu-arm64.tar.gz
+export LLVM_BINARY_DIR=/home/green/.triton/llvm/llvm-b1115f8c-ubuntu-x64/bin
+export TRITON_SHARED_OPT_PATH=/home/green/code/triton/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt
+```
+
+
+
+
+
+
 <div align="center">
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
