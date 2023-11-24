@@ -66,6 +66,7 @@ def get_pybind11_package_info():
 # llvm
 
 
+
 def get_llvm_package_info():
     # added statement for Apple Silicon
     system = platform.system()
@@ -76,14 +77,14 @@ def get_llvm_package_info():
         arch = platform.machine()
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
-        # TODO: arm64
         vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
         vglibc = vglibc[0] * 100 + vglibc[1]
-        system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
+        if arch == 'arm64':
+            system_suffix = 'ubuntu-arm64'  # Add this line for arm64 on Linux (Ubuntu)
+        else:
+            system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
-    # release_suffix = "assert" if use_assert_enabled_llvm else "release"
     rev = "b1115f8c"
     name = f"llvm-{rev}-{system_suffix}"
     url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
