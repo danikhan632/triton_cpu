@@ -87,7 +87,7 @@ def get_llvm_package_info():
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     rev = "b1115f8c"
     name = f"llvm-{rev}-{system_suffix}"
-    if system_suffix == 'ubuntu-arm64' 
+    if system_suffix == 'ubuntu-arm64':
         url = "https://hackgtstoragebucket.s3.amazonaws.com/llvm-b1115f8c-ubuntu-arm64.tar.gz"
     else:
         url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
