@@ -21,7 +21,7 @@ def reduce_kernel_2d(
 
 n_rows = 16
 n_cols = 32
-x = torch.rand([n_cols, n_rows], device="cpu", dtype=torch.float16)
+x = torch.rand([n_cols, n_rows], device="cpu", dtype=torch.float32)
 output = torch.empty([n_cols], device=x.device, dtype=x.dtype)
 BLOCK_SIZE = n_rows
 grid = lambda meta: (n_cols, )
@@ -31,7 +31,7 @@ ans = torch.sum(x, dim=1)
 torch.testing.assert_close(output, ans, rtol=0.001, atol=1e-5)
 print("Pass!")
 
-ret = triton.compile(reduce_kernel_2d, signature="*fp16,*fp16,i32,i32", constants={"BLOCK_SIZE": 32}, device_type="cpu")
+ret = triton.compile(reduce_kernel_2d, signature="*fp32,*fp32,i32,i32", constants={"BLOCK_SIZE": 32}, device_type="cpu")
 # print(ret.asm["ttir"])
 # print(ret.asm["ttsharedir"])
 # print(ret.asm["llir"])

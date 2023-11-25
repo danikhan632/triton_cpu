@@ -1,23 +1,3 @@
-"""
-Vector Addition
-===============
-
-In this tutorial, you will write a simple vector addition using Triton.
-
-In doing so, you will learn about:
-
-* The basic programming model of Triton.
-
-* The `triton.jit` decorator, which is used to define Triton kernels.
-
-* The best practices for validating and benchmarking your custom ops against native reference implementations.
-
-"""
-
-# %%
-# Compute Kernel
-# --------------
-
 import torch
 
 import triton
@@ -31,7 +11,7 @@ def add_kernel(
     output_ptr,  # *Pointer* to output vector.
     n_elements,  # Size of the vector.
     BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
-                 # NOTE: `constexpr` so it can be used as a shape value.
+    # NOTE: `constexpr` so it can be used as a shape value.
 ):
     # There are multiple 'programs' processing different data. We identify which program
     # we are here:
@@ -53,20 +33,15 @@ def add_kernel(
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-# %%
-# Let's also declare a helper function to (1) allocate the `z` tensor
-# and (2) enqueue the above kernel with appropriate grid/block sizes:
-
-
 def add(x: torch.Tensor, y: torch.Tensor):
     # We need to preallocate the output.
     output = torch.empty_like(x)
-
+    # assert x.is_cuda and y.is_cuda and output.is_cuda
     n_elements = output.numel()
     # The SPMD launch grid denotes the number of kernel instances that run in parallel.
     # It is analogous to CUDA launch grids. It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int].
     # In this case, we use a 1D grid where the size is the number of blocks:
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
     # NOTE:
     #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be indexed with a launch grid to obtain a callable GPU kernel.
@@ -77,20 +52,17 @@ def add(x: torch.Tensor, y: torch.Tensor):
     return output
 
 
-# %%
-# We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
-
-torch.manual_seed(0)
-size = 98432
-x = torch.rand(size, device='cpu')
-y = torch.rand(size, device='cpu')
-output_torch = x + y
-output_triton = add(x, y)
-print(output_torch)
-print(output_triton)
-
-
-print(
-    f'The maximum difference between torch and triton is '
-    f'{torch.max(torch.abs(output_torch - output_triton))}'
-)
+def test():
+    torch.manual_seed(0)
+    size = 98432
+    x = torch.rand(size, device="cpu")
+    y = torch.rand(size, device="cpu")
+    output_torch = x + y
+    output_triton = add(x, y)
+    print("expected", output_torch)
+    print("actual", output_triton)
+    print(
+        f"The maximum difference between torch and triton is "
+        f"{torch.max(torch.abs(output_torch - output_triton))}"
+    )
+test()
