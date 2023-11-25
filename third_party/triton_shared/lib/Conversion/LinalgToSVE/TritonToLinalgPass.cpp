@@ -8,7 +8,6 @@
 #include "triton-shared/Analysis/UseAnalysis.h"
 #include "triton-shared/Conversion/TritonToLinalg/TritonToLinalg.h"
 #include "triton-shared/Dialect/TritonTilingExt/IR/TritonTilingExtDialect.h"
-#include "llvm/Support/raw_ostream.h" // Include if not already included
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -59,45 +58,32 @@ struct TritonToLinalgPass : public TritonToLinalgBase<TritonToLinalgPass> {
   // Add additional I32 arguments to represent:
   // - num_programs, 3 in total, one for each axis of the launch grid
   // - program_id, 3 in total, one for each axis of the launch grid
+  static void addProgramInfo(triton::FuncOp func) {
+    OpBuilder b(func);
 
-static void addProgramInfo(triton::FuncOp func) {
-  OpBuilder b(func);
+    auto origFuncType = func.getFunctionType();
+    auto origInputTypes = origFuncType.getInputs();
+    SmallVector<Type> newInputTypes(origInputTypes);
+    newInputTypes.append(TRITON_PROGRAM_INFO_ARG_COUNT, b.getI32Type());
 
-  auto origFuncType = func.getFunctionType();
-  auto origInputTypes = origFuncType.getInputs();
-  SmallVector<Type> newInputTypes(origInputTypes);
-  newInputTypes.append(TRITON_PROGRAM_INFO_ARG_COUNT, b.getI32Type());
+    auto newFuncType =
+        b.getFunctionType(newInputTypes, origFuncType.getResults());
 
-  // Print original function type
-  llvm::dbgs() << "Original Function Type: " << origFuncType << "\n";
+    func.setFunctionType(newFuncType);
 
-  auto newFuncType =
-      b.getFunctionType(newInputTypes, origFuncType.getResults());
+    // Add empty attributes for each new argument if needed
+    if (func.getAllArgAttrs()) {
+      SmallVector<DictionaryAttr> newArgAttrs;
+      func.getAllArgAttrs(newArgAttrs);
+      newArgAttrs.append(TRITON_PROGRAM_INFO_ARG_COUNT, DictionaryAttr());
+      func.setAllArgAttrs(newArgAttrs);
+    }
 
-  // Print new function type
-  llvm::dbgs() << "New Function Type: " << newFuncType << "\n";
-
-  func.setFunctionType(newFuncType);
-
-  // Add empty attributes for each new argument if needed
-  if (func.getAllArgAttrs()) {
-    SmallVector<DictionaryAttr> newArgAttrs;
-    func.getAllArgAttrs(newArgAttrs);
-    newArgAttrs.append(TRITON_PROGRAM_INFO_ARG_COUNT, DictionaryAttr());
-    func.setAllArgAttrs(newArgAttrs);
+    // Add the corresponding arguments to function body
+    for (unsigned int i = 0; i < TRITON_PROGRAM_INFO_ARG_COUNT; i++) {
+      func.getBody().front().addArgument(b.getI32Type(), func.getLoc());
+    }
   }
-
-  // Add the corresponding arguments to function body
-  for (unsigned int i = 0; i < TRITON_PROGRAM_INFO_ARG_COUNT; i++) {
-    auto arg = func.getBody().front().addArgument(b.getI32Type(), func.getLoc());
-    // Print added argument
-    llvm::dbgs() << "Added Argument: " << arg << "\n";
-  }
-
-  // Optionally, print the entire function after modifications
-  llvm::dbgs() << "Modified Function:\n" << func << "\n";
-}
-
 
 public:
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -110,11 +96,6 @@ public:
 
   void runOnOperation() override {
     auto moduleOp = getOperation();
-  moduleOp.walk([](Operation *op) {
-    llvm::dbgs() <<  "\033[31m<<" << "Operation: " << *op << "\n" <<"\033[0m" ;
-  });
-
-  int useless =5;
 
     {
       RewritePatternSet patterns(&getContext());

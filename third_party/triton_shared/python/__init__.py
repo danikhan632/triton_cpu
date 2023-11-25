@@ -90,10 +90,12 @@ def _ttsharedir_to_llir(ttsharedir: str):
 
 def _optimize_llir(llir: str):
     # We don't apply any optimizations now, but we can add passes if needed.
+    printc(llir,"green")
     return llir
 
 
 def _llir_to_bin(llir: str):
+    
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "kernel.ll")
         dst_path = os.path.join(tmpdir, "kernel.o")
