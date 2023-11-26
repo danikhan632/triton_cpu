@@ -42,5 +42,5 @@ docs/getting-started/tutorials
 .clangd/
 .cache
 /compile_commands.json
-.vscode
+
 .vs
