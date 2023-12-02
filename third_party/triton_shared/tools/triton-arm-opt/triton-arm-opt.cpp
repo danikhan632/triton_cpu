@@ -9,6 +9,9 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include <iostream>
+
+
 
 using namespace mlir;
 
@@ -18,6 +21,7 @@ namespace {
 
         LogicalResult matchAndRewrite(linalg::MatmulOp op, PatternRewriter &rewriter) const override {
             // Fake conversion: Simply succeed without doing anything.
+            std::cout<< ("benchod") <<std::endl;
             return success();
         }
     };
@@ -43,6 +47,7 @@ std::unique_ptr<Pass> createFakeMatmulConversionPass() {
 int main(int argc, char **argv) {
     DialectRegistry registry;
     registerAllDialects(registry);
+    registry.insert<mlir::func::FuncDialect>();
     registerAllPasses();
 
     // Register your custom pass
