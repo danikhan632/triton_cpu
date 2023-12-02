@@ -85,11 +85,11 @@ def get_llvm_package_info():
             system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    rev = "b1115f8c"
+    rev = "49af6502"
     name = f"llvm-{rev}-{system_suffix}"
     if system_suffix == 'ubuntu-arm64':
-        url = "https://hackgtstoragebucket.s3.amazonaws.com/llvm-b1115f8c-ubuntu-arm64.tar.gz"
-    else:
+        url = "https://storage.googleapis.com/compiled-blob/llvm-49af6502-ubuntu-arm64.tar.gz"
+    else: 
         url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
