@@ -47,7 +47,7 @@ std::unique_ptr<Pass> createFakeMatmulConversionPass() {
 int main(int argc, char **argv) {
     DialectRegistry registry;
     registerAllDialects(registry);
-    registry.insert<mlir::func::FuncDialect>();
+
     registerAllPasses();
 
     // Register your custom pass

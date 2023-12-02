@@ -69,13 +69,13 @@ static void addProgramInfo(triton::FuncOp func) {
   newInputTypes.append(TRITON_PROGRAM_INFO_ARG_COUNT, b.getI32Type());
 
   // Print original function type
-  llvm::dbgs() << "Original Function Type: " << origFuncType << "\n";
+  // llvm::dbgs() << "Original Function Type: " << origFuncType << "\n";
 
   auto newFuncType =
       b.getFunctionType(newInputTypes, origFuncType.getResults());
 
   // Print new function type
-  llvm::dbgs() << "New Function Type: " << newFuncType << "\n";
+  // llvm::dbgs() << "New Function Type: " << newFuncType << "\n";
 
   func.setFunctionType(newFuncType);
 
@@ -87,15 +87,15 @@ static void addProgramInfo(triton::FuncOp func) {
     func.setAllArgAttrs(newArgAttrs);
   }
 
-  // Add the corresponding arguments to function body
-  for (unsigned int i = 0; i < TRITON_PROGRAM_INFO_ARG_COUNT; i++) {
-    auto arg = func.getBody().front().addArgument(b.getI32Type(), func.getLoc());
-    // Print added argument
-    llvm::dbgs() << "Added Argument: " << arg << "\n";
-  }
+  // // Add the corresponding arguments to function body
+  // for (unsigned int i = 0; i < TRITON_PROGRAM_INFO_ARG_COUNT; i++) {
+  //   auto arg = func.getBody().front().addArgument(b.getI32Type(), func.getLoc());
+  //   // Print added argument
+  //   llvm::dbgs() << "Added Argument: " << arg << "\n";
+  // }
 
-  // Optionally, print the entire function after modifications
-  llvm::dbgs() << "Modified Function:\n" << func << "\n";
+  // // Optionally, print the entire function after modifications
+  // llvm::dbgs() << "Modified Function:\n" << func << "\n";
 }
 
 
@@ -110,9 +110,9 @@ public:
 
   void runOnOperation() override {
     auto moduleOp = getOperation();
-  moduleOp.walk([](Operation *op) {
-    llvm::dbgs() <<  "\033[31m<<" << "Operation: " << *op << "\n" <<"\033[0m" ;
-  });
+  // moduleOp.walk([](Operation *op) {
+  //   llvm::dbgs() <<  "\033[31m<<" << "Operation: " << *op << "\n" <<"\033[0m" ;
+  // });
 
   int useless =5;
 
