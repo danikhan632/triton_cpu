@@ -39,7 +39,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     file_path = sys.argv[1]
-    triton_shared_opt_path = "/home/green/code/triton/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt"
-    triton_arm_opt_path = "/home/green/code/triton/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-arm-opt/triton-arm-opt"
+    triton_shared_opt_path = "/home/green/code/triton_cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt"
+    triton_arm_opt_path = "/home/green/code/triton_cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-arm-opt/triton-arm-opt"
     
     process_mlir_file(file_path, triton_shared_opt_path, triton_arm_opt_path)
