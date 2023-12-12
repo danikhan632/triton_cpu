@@ -4,7 +4,7 @@ import sysconfig
 import subprocess
 import tempfile
 from pathlib import Path
-
+from mlir.ir import Context, Module
 from triton.common.backend import BaseBackend, register_backend
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
@@ -45,7 +45,7 @@ def _ttir_to_ttsharedir(mod):
 
 def _optimize_ttsharedir(ttsharedir: str):
     # We don't apply any optimizations now, but we can add passes if needed.
-    printc(ttsharedir)
+    # printc(ttsharedir)
     return ttsharedir
 
 
@@ -69,13 +69,16 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
-            "--convert-vector-to-llvm",
+            "--convert-vector-to-arm-sme",
+            "--allocate-arm-sme-tiles",
             "--convert-index-to-llvm",
             "--memref-expand",
             "--expand-strided-metadata",
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
             "--reconcile-unrealized-casts",
+            "--convert-vector-to-arm-sme",
+            
             "-o",
             llmlir_path])
 
