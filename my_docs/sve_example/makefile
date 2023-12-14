@@ -1,0 +1,1 @@
+# gcc -march=armv8-a+sve main.c -o sve  

@@ -69,16 +69,13 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
-            "--convert-vector-to-arm-sme",
-            "--allocate-arm-sme-tiles",
+            "--convert-vector-to-llvm",
             "--convert-index-to-llvm",
             "--memref-expand",
             "--expand-strided-metadata",
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
             "--reconcile-unrealized-casts",
-            "--convert-vector-to-arm-sme",
-            
             "-o",
             llmlir_path])
 
