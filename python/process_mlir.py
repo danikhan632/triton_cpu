@@ -28,7 +28,7 @@ def process_mlir_file(file_path, triton_shared_opt_path, triton_arm_opt_path):
     run_command(triton_shared_opt_command)
 
     # Run triton-arm-opt on the processed file
-    triton_arm_opt_command = [triton_arm_opt_path, output_file_path, "-fake-matmul-conversion"]
+    triton_arm_opt_command = [triton_arm_opt_path, output_file_path, "-am"]
     print("Running triton-arm-opt...")
     run_command(triton_arm_opt_command)
 

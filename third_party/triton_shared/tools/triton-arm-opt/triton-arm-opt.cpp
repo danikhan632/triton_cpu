@@ -36,9 +36,21 @@ LogicalResult matchAndRewrite(linalg::MatmulOp op,
     assert(outputs.size() == 1 && "MatmulOp should have a single output");
     Value matrixC = outputs[0];
 
-    auto matrixAType = matrixA.getType().cast<MemRefType>();
-    auto matrixBType = matrixB.getType().cast<MemRefType>();
-    auto matrixCType = matrixC.getType().cast<MemRefType>();
+    if (!llvm::isa<mlir::MemRefType>(matrixA.getType()) || 
+        !llvm::isa<mlir::MemRefType>(matrixB.getType()) || 
+        !llvm::isa<mlir::MemRefType>(matrixC.getType())) {
+        llvm::errs() << "Error: One or more matrices are not of MemRefType.\n";
+        llvm::errs() << "Matrix A type: " << matrixA.getType() << "\n";
+        llvm::errs() << "Matrix B type: " << matrixB.getType() << "\n";
+        llvm::errs() << "Matrix C type: " << matrixC.getType() << "\n";
+        
+        return failure();
+    }
+
+    // Cast the types to MemRefType
+    auto matrixAType = matrixA.getType().cast<mlir::MemRefType>();
+    auto matrixBType = matrixB.getType().cast<mlir::MemRefType>();
+    auto matrixCType = matrixC.getType().cast<mlir::MemRefType>();
 
     // Loop over the rows of A and columns of B
     for (int64_t i = 0; i < matrixAType.getShape()[0]; ++i) {
@@ -98,7 +110,7 @@ int main(int argc, char **argv) {
 
   // Register your custom pass
   PassPipelineRegistration<> pipeline(
-      "ame-sme-matmul-conversion",
+      "am",
       "Converts linalg.matmul to ame-sme-matmul operation",
       [](OpPassManager &pm) { pm.addPass(createArmMatmulConversionPass()); });
 
