@@ -13,97 +13,60 @@
 #include <iostream>
 #include <llvm/Support/raw_ostream.h> // Include if using llvm::outs()
 using namespace mlir;
+using namespace mlir::linalg;
+using namespace mlir::memref;
+using namespace mlir::arith;
 
 namespace {
 struct ArmMatmulConversion : public OpRewritePattern<linalg::MatmulOp> {
   using OpRewritePattern<linalg::MatmulOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(linalg::MatmulOp op,
-                                PatternRewriter &rewriter) const override {
-    // Extract operands and results from the Matmul operation
-    Value lhs = op.getDpsInputOperand(0)->get();
-    Value rhs = op.getDpsInputOperand(1)->get();
-    Value result = op.getDpsOutputOperand(0)->get();
-    RankedTensorType lhsType = lhs.getType().cast<RankedTensorType>();
-    RankedTensorType rhsType = rhs.getType().cast<RankedTensorType>();
 
-    if (!lhsType || !rhsType) {
-      return failure(); // Ensure input matrices are ranked tensors
+LogicalResult matchAndRewrite(linalg::MatmulOp op,
+                              PatternRewriter &rewriter) const override {
+
+    auto loc = op.getLoc();
+
+    // Extracting the operands and result
+    Value matrixA = op.getOperand(0);
+    Value matrixB = op.getOperand(1);
+    auto outputs = op.getOutputs();
+    
+    // Assuming there's only one output operand
+    assert(outputs.size() == 1 && "MatmulOp should have a single output");
+    Value matrixC = outputs[0];
+
+    auto matrixAType = matrixA.getType().cast<MemRefType>();
+    auto matrixBType = matrixB.getType().cast<MemRefType>();
+    auto matrixCType = matrixC.getType().cast<MemRefType>();
+
+    // Loop over the rows of A and columns of B
+    for (int64_t i = 0; i < matrixAType.getShape()[0]; ++i) {
+        for (int64_t j = 0; j < matrixBType.getShape()[1]; ++j) {
+            Value iIndex = rewriter.create<arith::ConstantIndexOp>(loc, i);
+            Value jIndex = rewriter.create<arith::ConstantIndexOp>(loc, j);
+
+            Value sum = rewriter.create<arith::ConstantFloatOp>(loc, APFloat(0.0f), rewriter.getF32Type());
+
+            for (int64_t k = 0; k < matrixAType.getShape()[1]; ++k) {
+                Value kIndex = rewriter.create<arith::ConstantIndexOp>(loc, k);
+
+                auto aElem = rewriter.create<memref::LoadOp>(loc, matrixA, ValueRange{iIndex, kIndex});
+                auto bElem = rewriter.create<memref::LoadOp>(loc, matrixB, ValueRange{kIndex, jIndex});
+
+                auto prod = rewriter.create<arith::MulFOp>(loc, aElem, bElem);
+                sum = rewriter.create<arith::AddFOp>(loc, sum, prod);
+            }
+
+            rewriter.create<memref::StoreOp>(loc, sum, matrixC, ValueRange{iIndex, jIndex});
+        }
     }
 
-    // Get the dimensions of the input matrices
-    int64_t lhsRows = lhsType.getShape()[0];
-    int64_t lhsCols = lhsType.getShape()[1];
-    int64_t rhsCols = rhsType.getShape()[1];
-
-    // Define tile sizes and loop unrolling factor
-    const int64_t tileSize = 256; // Example tile size
-
-    // Create nested scf::ForOp loops for tiling and iteration
-    auto loopI =
-        rewriter.create<scf::ForOp>(op.getLoc(), rewriter.getI64IntegerAttr(0),
-                                    rewriter.getI64IntegerAttr(lhsRows),
-                                    rewriter.getI64IntegerAttr(tileSize));
-
-    auto loopIBodyBuilder = [&](OpBuilder &nestedBuilder, Location loc,
-                                Value ivI, ValueRange loopICarry) {
-      auto loopJ = nestedBuilder.create<scf::ForOp>(
-          loc, nestedBuilder.getI64IntegerAttr(0),
-          nestedBuilder.getI64IntegerAttr(rhsCols),
-          rewriter.getI64IntegerAttr(tileSize));
-
-      auto loopJBodyBuilder = [&](OpBuilder &nestedBuilder, Location loc,
-                                  Value ivJ, ValueRange loopJCarry) {
-        // Initialize 'acc' for each iteration of the 'j' loop
-        Value acc = nestedBuilder.create<mlir::ConstantOp>(
-            loc, FloatType::getF32(nestedBuilder.getContext()),
-            nestedBuilder.getFloatAttr(0.0));
-
-        auto loopK = nestedBuilder.create<scf::ForOp>(
-            loc, nestedBuilder.getI64IntegerAttr(0),
-            nestedBuilder.getI64IntegerAttr(lhsCols),
-            rewriter.getI64IntegerAttr(tileSize));
-
-        auto loopKBodyBuilder = [&](OpBuilder &nestedBuilder, Location loc,
-                                    Value ivK, ValueRange loopKCarry) {
-          // Perform matrix multiplication using Arm SVE operations
-          Value lhsVal =
-              nestedBuilder.create<LoadOp>(loc, lhs, ValueRange{ivI, ivK});
-          Value rhsVal =
-              nestedBuilder.create<LoadOp>(loc, rhs, ValueRange{ivK, ivJ});
-
-          // Floating-point multiplication
-          Value mulVal = nestedBuilder.create<arm_sve::ScalableMaskedMulFOp>(
-              loc, lhsVal, rhsVal);
-
-          // Accumulate the result
-          acc = nestedBuilder.create<arm_sve::ScalableMaskedAddFOp>(loc, acc,
-                                                                    mulVal);
-
-          nestedBuilder.create<scf::YieldOp>(loc, acc);
-        };
-
-        nestedBuilder.create<scf::YieldOp>(loc); // Yield for loopK
-        loopK.getRegion().front().addArguments(nestedBuilder.getF32Type(),
-                                               loc); // Add loopK arguments
-        loopK.getRegion().front().walk(loopKBodyBuilder);
-      };
-
-      nestedBuilder.create<scf::YieldOp>(loc); // Yield for loopJ
-      loopJ.getRegion().front().addArguments(nestedBuilder.getF32Type(),
-                                             loc); // Add loopJ arguments
-      loopJ.getRegion().front().walk(loopJBodyBuilder);
-    };
-
-    rewriter.create<scf::YieldOp>(op.getLoc()); // Yield for loopI
-    loopI.getRegion().front().addArguments(rewriter.getF32Type(),
-                                           op.getLoc()); // Add loopI arguments
-    loopI.getRegion().front().walk(loopIBodyBuilder);
-
-    // Rest of the implementation...
-
+    rewriter.eraseOp(op);
     return success();
-  }
+}
+
+
 };
 
 class ArmMatmulConversionPass
@@ -129,7 +92,7 @@ int main(int argc, char **argv) {
   DialectRegistry registry;
   registerAllDialects(registry);
   registry
-      .insert<mlir::arm_sme::ArmSMEDialect>(); // Adjust the namespace if needed
+      .insert<mlir::arm_sve::ArmSVEDialect>(); // Adjust the namespace if needed
 
   registerAllPasses();
 
