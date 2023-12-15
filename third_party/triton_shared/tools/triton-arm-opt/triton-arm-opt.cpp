@@ -22,6 +22,7 @@ struct ArmMatmulConversion : public OpRewritePattern<linalg::MatmulOp> {
   using OpRewritePattern<linalg::MatmulOp>::OpRewritePattern;
 
 
+
 LogicalResult matchAndRewrite(linalg::MatmulOp op,
                               PatternRewriter &rewriter) const override {
 
@@ -31,26 +32,27 @@ LogicalResult matchAndRewrite(linalg::MatmulOp op,
     Value matrixA = op.getOperand(0);
     Value matrixB = op.getOperand(1);
     auto outputs = op.getOutputs();
-    
+
     // Assuming there's only one output operand
     assert(outputs.size() == 1 && "MatmulOp should have a single output");
     Value matrixC = outputs[0];
 
-    if (!llvm::isa<mlir::MemRefType>(matrixA.getType()) || 
-        !llvm::isa<mlir::MemRefType>(matrixB.getType()) || 
-        !llvm::isa<mlir::MemRefType>(matrixC.getType())) {
-        llvm::errs() << "Error: One or more matrices are not of MemRefType.\n";
-        llvm::errs() << "Matrix A type: " << matrixA.getType() << "\n";
-        llvm::errs() << "Matrix B type: " << matrixB.getType() << "\n";
-        llvm::errs() << "Matrix C type: " << matrixC.getType() << "\n";
-        
-        return failure();
+    // Ensure operands are tensors
+    if (!matrixA.getType().isa<mlir::TensorType>() ||
+        !matrixB.getType().isa<mlir::TensorType>() ||
+        !matrixC.getType().isa<mlir::TensorType>()) {
+      llvm::errs() << "Error: One or more matrices are not of TensorType.\n";
+      return failure();
     }
 
-    // Cast the types to MemRefType
-    auto matrixAType = matrixA.getType().cast<mlir::MemRefType>();
-    auto matrixBType = matrixB.getType().cast<mlir::MemRefType>();
-    auto matrixCType = matrixC.getType().cast<mlir::MemRefType>();
+    // Cast the types to TensorType
+    auto matrixAType = matrixA.getType().cast<mlir::TensorType>();
+    auto matrixBType = matrixB.getType().cast<mlir::TensorType>();
+    auto matrixCType = matrixC.getType().cast<mlir::TensorType>();
+
+    // Prepare a new result tensor, initially empty
+    auto resultType = matrixCType;
+    Value newResult = rewriter.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
 
     // Loop over the rows of A and columns of B
     for (int64_t i = 0; i < matrixAType.getShape()[0]; ++i) {
@@ -63,20 +65,26 @@ LogicalResult matchAndRewrite(linalg::MatmulOp op,
             for (int64_t k = 0; k < matrixAType.getShape()[1]; ++k) {
                 Value kIndex = rewriter.create<arith::ConstantIndexOp>(loc, k);
 
-                auto aElem = rewriter.create<memref::LoadOp>(loc, matrixA, ValueRange{iIndex, kIndex});
-                auto bElem = rewriter.create<memref::LoadOp>(loc, matrixB, ValueRange{kIndex, jIndex});
+                Value aElem = rewriter.create<tensor::ExtractOp>(loc, matrixA, ValueRange{iIndex, kIndex});
+                Value bElem = rewriter.create<tensor::ExtractOp>(loc, matrixB, ValueRange{kIndex, jIndex});
 
                 auto prod = rewriter.create<arith::MulFOp>(loc, aElem, bElem);
                 sum = rewriter.create<arith::AddFOp>(loc, sum, prod);
             }
 
-            rewriter.create<memref::StoreOp>(loc, sum, matrixC, ValueRange{iIndex, jIndex});
+            newResult = rewriter.create<tensor::InsertOp>(loc, sum, newResult, ValueRange{iIndex, jIndex});
         }
     }
 
-    rewriter.eraseOp(op);
+    // Replace all uses of the original matmul operation with the new result
+    rewriter.replaceOp(op, newResult);
+
     return success();
-}
+
+  }
+
+
+
 
 
 };
