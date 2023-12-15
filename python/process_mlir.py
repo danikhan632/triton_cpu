@@ -18,7 +18,7 @@ def run_command(command):
 
 def process_mlir_file(file_path, triton_shared_opt_path, triton_arm_opt_path):
     # Define the output file path in the /tmp directory
-    output_file_path = "/tmp/dot.mlir"
+    output_file_path = "/home/green/code/triton_cpu/python/output.mlir"
 
     # Run triton-shared-opt on the file
     triton_shared_opt_command = [

@@ -18,7 +18,7 @@ using namespace mlir::memref;
 using namespace mlir::arith;
 
 namespace {
-struct ArmMatmulConversion : public OpRewritePattern<linalg::MatmulOp> {
+struct AmxMatmulConversion : public OpRewritePattern<linalg::MatmulOp> {
   using OpRewritePattern<linalg::MatmulOp>::OpRewritePattern;
 
 
@@ -92,8 +92,8 @@ LogicalResult matchAndRewrite(linalg::MatmulOp op,
 
 };
 
-class ArmMatmulConversionPass
-    : public PassWrapper<ArmMatmulConversionPass, OperationPass<func::FuncOp>> {
+class AmxMatmulConversionPass
+    : public PassWrapper<AmxMatmulConversionPass, OperationPass<func::FuncOp>> {
 public:
 void runOnOperation() override {
   auto func = getOperation();
@@ -106,7 +106,7 @@ void runOnOperation() override {
   }
 
   RewritePatternSet patterns(context);
-  patterns.add<ArmMatmulConversion>(context);
+  patterns.add<AmxMatmulConversion>(context);
 
   (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
 }
@@ -115,8 +115,8 @@ void runOnOperation() override {
 };
 } // namespace
 
-std::unique_ptr<Pass> createArmMatmulConversionPass() {
-  return std::make_unique<ArmMatmulConversionPass>();
+std::unique_ptr<Pass> createAmxMatmulConversionPass() {
+  return std::make_unique<AmxMatmulConversionPass>();
 }
 
 int main(int argc, char **argv) {
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
   PassPipelineRegistration<> pipeline(
       "am",
       "Converts linalg.matmul to ame-sme-matmul operation",
-      [](OpPassManager &pm) { pm.addPass(createArmMatmulConversionPass()); });
+      [](OpPassManager &pm) { pm.addPass(createAmxMatmulConversionPass()); });
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Linalg-opt driver\n", registry));

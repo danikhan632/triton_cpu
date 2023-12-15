@@ -7,11 +7,11 @@ message(STATUS "MLIR Conversion Libraries: ${conversion_libs}")
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
 
-add_llvm_executable(triton-arm-opt triton-arm-opt.cpp PARTIAL_SOURCES_INTENDED)
+add_llvm_executable(triton-amx-opt triton-amx-opt.cpp PARTIAL_SOURCES_INTENDED)
 
 # TODO: what's this?
-llvm_update_compile_flags(triton-arm-opt)
-target_link_libraries(triton-arm-opt PRIVATE
+llvm_update_compile_flags(triton-amx-opt)
+target_link_libraries(triton-amx-opt PRIVATE
 
   ${dialect_libs}
   ${conversion_libs}
@@ -24,7 +24,7 @@ target_link_libraries(triton-arm-opt PRIVATE
 )
 
 
-target_include_directories(triton-arm-opt PUBLIC
+target_include_directories(triton-amx-opt PUBLIC
   ${MLIR_INCLUDE_PATHS}
   ${LLVM_INCLUDE_PATHS}
   # Other necessary include paths
