@@ -113,11 +113,11 @@ std::unique_ptr<Pass> createArmMatmulConversionPass() {
 
 int main(int argc, char **argv) {
   DialectRegistry registry;
+  
+  registry.insert<mlir::arm_sve::ArmSVEDialect>(); // Adjust the namespace if needed
   registerAllDialects(registry);
-  registry
-      .insert<mlir::arm_sve::ArmSVEDialect>(); // Adjust the namespace if needed
-
   registerAllPasses();
+
 
   // Register your custom pass
   PassPipelineRegistration<> pipeline(
