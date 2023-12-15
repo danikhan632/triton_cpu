@@ -25,9 +25,8 @@ struct ArmMatmulConversion : public OpRewritePattern<linalg::MatmulOp> {
 
 LogicalResult matchAndRewrite(linalg::MatmulOp op,
                               PatternRewriter &rewriter) const override {
-
     auto loc = op.getLoc();
-
+    
     // Extracting the operands and result
     Value matrixA = op.getOperand(0);
     Value matrixB = op.getOperand(1);
@@ -41,8 +40,8 @@ LogicalResult matchAndRewrite(linalg::MatmulOp op,
     if (!matrixA.getType().isa<mlir::TensorType>() ||
         !matrixB.getType().isa<mlir::TensorType>() ||
         !matrixC.getType().isa<mlir::TensorType>()) {
-      llvm::errs() << "Error: One or more matrices are not of TensorType.\n";
-      return failure();
+        llvm::errs() << "Error: One or more matrices are not of TensorType.\n";
+        return failure();
     }
 
     // Cast the types to TensorType
@@ -60,18 +59,24 @@ LogicalResult matchAndRewrite(linalg::MatmulOp op,
             Value iIndex = rewriter.create<arith::ConstantIndexOp>(loc, i);
             Value jIndex = rewriter.create<arith::ConstantIndexOp>(loc, j);
 
-            Value sum = rewriter.create<arith::ConstantFloatOp>(loc, APFloat(0.0f), rewriter.getF32Type());
+            // Accumulator for the result at (i, j)
+            Value sum = rewriter.create<arith::ConstantIntOp>(loc, 0, rewriter.getIntegerType(32));  // Initialize to 0
 
+            // Loop over the inner dimension (k) for matrix multiplication
             for (int64_t k = 0; k < matrixAType.getShape()[1]; ++k) {
                 Value kIndex = rewriter.create<arith::ConstantIndexOp>(loc, k);
 
+                // Extract elements from matrices A and B
                 Value aElem = rewriter.create<tensor::ExtractOp>(loc, matrixA, ValueRange{iIndex, kIndex});
                 Value bElem = rewriter.create<tensor::ExtractOp>(loc, matrixB, ValueRange{kIndex, jIndex});
 
-                auto prod = rewriter.create<arith::MulFOp>(loc, aElem, bElem);
-                sum = rewriter.create<arith::AddFOp>(loc, sum, prod);
+                // Perform unsigned integer matrix multiplication and accumulate the result
+                Value mulResult = rewriter.create<arm_sve::UmmlaOp>(loc, rewriter.getIntegerType(32), sum, aElem, bElem);
+                sum = mulResult;
             }
 
+
+            // Insert the accumulated result into the new result matrix
             newResult = rewriter.create<tensor::InsertOp>(loc, sum, newResult, ValueRange{iIndex, jIndex});
         }
     }
@@ -80,9 +85,7 @@ LogicalResult matchAndRewrite(linalg::MatmulOp op,
     rewriter.replaceOp(op, newResult);
 
     return success();
-
-  }
-
+}
 
 
 
