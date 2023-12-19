@@ -1,0 +1,79 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File (pdb)",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "python": "python3.11",
+            "cwd": "${workspaceFolder}",
+            "env": {},
+            "internalConsoleOptions": "neverOpen"
+        },
+        {
+            "name": "x86_triton-shared-opt",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/home/green/code/triton_cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt",
+            "args": ["--triton-to-linalg", "${workspaceFolder}/third_party/triton_shared/test/Conversion/TritonToLinalg/addptr_2d_example.mlir"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "Clear Triton Cache",
+            "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
+            "name": "arm-triton-shared-opt",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/home/utmarm/code/triton_cpu/python/build/cmake.linux-aarch64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt",
+            "args": ["--triton-to-linalg", "${workspaceFolder}/third_party/triton_shared/test/Conversion/TritonToLinalg/dot.mlir"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "Clear Triton Cache",
+            "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
+            "name": "armsve_pass",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/home/green/code/triton_cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-arm-opt/triton-arm-opt",
+            "args": ["-am", "/home/green/code/triton_cpu/python/output.mlir"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "Clear Triton Cache",
+            "miDebuggerPath": "/usr/bin/gdb"
+        }
+    ]
+}

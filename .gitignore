@@ -17,9 +17,9 @@ __pycache__/
 venv/
 venv.bak/
 
-# VS Code project files
-.vscode
-.vs
+# # VS Code project files
+# .vscode
+# .vs
 
 # JetBrains project files
 .idea
@@ -43,4 +43,3 @@ docs/getting-started/tutorials
 .cache
 /compile_commands.json
 
-.vs
