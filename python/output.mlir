@@ -1,18 +1,30 @@
-#map = affine_map<(d0) -> (d0)>
+#map = affine_map<(d0, d1) -> (d0, d1)>
 module {
-  func.func @kernel(%arg0: memref<*xi32>, %arg1: memref<*xf32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32) {
-    %reinterpret_cast = memref.reinterpret_cast %arg0 to offset: [0], sizes: [1024], strides: [1] : memref<*xi32> to memref<1024xi32, strided<[1]>>
-    %reinterpret_cast_0 = memref.reinterpret_cast %arg1 to offset: [0], sizes: [1024], strides: [1] : memref<*xf32> to memref<1024xf32, strided<[1]>>
-    %alloc = memref.alloc() : memref<1024xi32>
-    memref.copy %reinterpret_cast, %alloc : memref<1024xi32, strided<[1]>> to memref<1024xi32>
-    %0 = bufferization.to_tensor %alloc restrict writable : memref<1024xi32>
-    %1 = tensor.empty() : tensor<1024xf32>
-    %2 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel"]} ins(%0 : tensor<1024xi32>) outs(%1 : tensor<1024xf32>) {
-    ^bb0(%in: i32, %out: f32):
-      %3 = arith.bitcast %in : i32 to f32
-      linalg.yield %3 : f32
-    } -> tensor<1024xf32>
-    memref.tensor_store %2, %reinterpret_cast_0 : memref<1024xf32, strided<[1]>>
+  func.func @kernel(%arg0: memref<*xbf16>, %arg1: memref<*xbf16>, %arg2: memref<*xbf16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32) {
+    %c256 = arith.constant 256 : index
+    %c128 = arith.constant 128 : index
+    %reinterpret_cast = memref.reinterpret_cast %arg0 to offset: [0], sizes: [128, 64], strides: [%c128, 1] : memref<*xbf16> to memref<128x64xbf16, strided<[?, 1]>>
+    %alloc = memref.alloc() : memref<128x64xbf16>
+    memref.copy %reinterpret_cast, %alloc : memref<128x64xbf16, strided<[?, 1]>> to memref<128x64xbf16>
+    %0 = bufferization.to_tensor %alloc restrict writable : memref<128x64xbf16>
+    %reinterpret_cast_0 = memref.reinterpret_cast %arg1 to offset: [0], sizes: [256, 64], strides: [1, %c256] : memref<*xbf16> to memref<256x64xbf16, strided<[1, ?]>>
+    %alloc_1 = memref.alloc() : memref<256x64xbf16>
+    memref.copy %reinterpret_cast_0, %alloc_1 : memref<256x64xbf16, strided<[1, ?]>> to memref<256x64xbf16>
+    %1 = bufferization.to_tensor %alloc_1 restrict writable : memref<256x64xbf16>
+    %2 = tensor.empty() : tensor<64x256xbf16>
+    %transposed = linalg.transpose ins(%1 : tensor<256x64xbf16>) outs(%2 : tensor<64x256xbf16>) permutation = [1, 0] 
+    %reinterpret_cast_2 = memref.reinterpret_cast %arg2 to offset: [0], sizes: [128, 256], strides: [%c256, 1] : memref<*xbf16> to memref<128x256xbf16, strided<[?, 1]>>
+    %alloc_3 = memref.alloc() : memref<128x256xbf16>
+    memref.copy %reinterpret_cast_2, %alloc_3 : memref<128x256xbf16, strided<[?, 1]>> to memref<128x256xbf16>
+    %3 = bufferization.to_tensor %alloc_3 restrict writable : memref<128x256xbf16>
+    %4 = tensor.empty() : tensor<128x256xbf16>
+    %5 = linalg.matmul ins(%0, %transposed : tensor<128x64xbf16>, tensor<64x256xbf16>) outs(%4 : tensor<128x256xbf16>) -> tensor<128x256xbf16>
+    %6 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%5, %3 : tensor<128x256xbf16>, tensor<128x256xbf16>) outs(%5 : tensor<128x256xbf16>) {
+    ^bb0(%in: bf16, %in_4: bf16, %out: bf16):
+      %7 = arith.addf %in, %in_4 : bf16
+      linalg.yield %7 : bf16
+    } -> tensor<128x256xbf16>
+    memref.tensor_store %6, %reinterpret_cast_2 : memref<128x256xbf16, strided<[?, 1]>>
     return
   }
 }
