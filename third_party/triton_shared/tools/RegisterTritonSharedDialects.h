@@ -39,5 +39,5 @@ inline void registerTritonSharedDialects(mlir::DialectRegistry &registry) {
       .insert<mlir::ttx::TritonTilingExtDialect, mlir::triton::TritonDialect,
               mlir::cf::ControlFlowDialect, mlir::triton::gpu::TritonGPUDialect,
               mlir::math::MathDialect, mlir::arith::ArithDialect,
-              mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
+              mlir::scf::SCFDialect, mlir::gpu::GPUDialect, mlir::vector::VectorDialect>();
 }

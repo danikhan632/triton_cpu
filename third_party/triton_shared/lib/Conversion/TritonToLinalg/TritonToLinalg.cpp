@@ -781,7 +781,6 @@ struct YieldConverter : public OpConversionPattern<scf::YieldOp> {
   }
 };
 
-
 struct MatmulConverter : public OpConversionPattern<triton::DotOp> {
   using OpConversionPattern<triton::DotOp>::OpConversionPattern;
 
@@ -793,7 +792,6 @@ struct MatmulConverter : public OpConversionPattern<triton::DotOp> {
     auto opc = adaptor.getC();
     auto opcOrig = op.getC();
 
-    // Check if opc is a zero tensor.
     bool skipC = false;
     if (auto splatOp = opcOrig.getDefiningOp<triton::SplatOp>()) {
       if (auto val = splatOp.getSrc().getDefiningOp<arith::ConstantOp>()) {
@@ -810,43 +808,25 @@ struct MatmulConverter : public OpConversionPattern<triton::DotOp> {
       }
     }
 
-    auto loc = op.getLoc();
-    auto dstType = op.getType().cast<RankedTensorType>();
+    auto dstType = cast<RankedTensorType>(op.getType());
     auto elemType = dstType.getElementType();
-    auto shape = dstType.getShape();
+    auto loc = op.getLoc();
 
-    // Create an uninitialized result tensor.
-    auto resultTensor = rewriter.create<tensor::EmptyOp>(loc, shape, elemType);
+    auto init =
+        rewriter.create<tensor::EmptyOp>(loc, dstType.getShape(), elemType);
 
-    // Get the dimensions for the loop bounds.
-    int64_t m = shape[0];
-    int64_t n = shape[1];
-    int64_t p = opb.getType().cast<RankedTensorType>().getShape()[1];
+    auto zero = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(), elemType, rewriter.getFloatAttr(elemType, 0));
 
-    // Create nested loops to perform matrix multiplication.
-   for (int64_t i = 0; i < m; ++i) {
-      for (int64_t j = 0; j < p; ++j) {
-        Value sum = rewriter.create<arith::ConstantOp>(loc, elemType,
-                                                       rewriter.getFloatAttr(elemType, 0));
-        for (int64_t k = 0; k < n; ++k) {
-          auto aIndices = ValueRange{rewriter.create<arith::ConstantIndexOp>(loc, i),
-                                     rewriter.create<arith::ConstantIndexOp>(loc, k)};
-          auto bIndices = ValueRange{rewriter.create<arith::ConstantIndexOp>(loc, k),
-                                     rewriter.create<arith::ConstantIndexOp>(loc, j)};
-          auto aVal = rewriter.create<tensor::ExtractOp>(loc, opa, aIndices);
-          auto bVal = rewriter.create<tensor::ExtractOp>(loc, opb, bIndices);
-          auto product = rewriter.create<arith::MulFOp>(loc, aVal, bVal);
-          sum = rewriter.create<arith::AddFOp>(loc, sum, product);
-        }
-        auto resultIndices = ValueRange{rewriter.create<arith::ConstantIndexOp>(loc, i),
-                                        rewriter.create<arith::ConstantIndexOp>(loc, j)};
-        rewriter.create<tensor::InsertOp>(loc, sum, resultTensor, resultIndices);
-      }
-    }
+    auto zeroes =
+        rewriter.create<linalg::FillOp>(loc, ValueRange{zero}, ValueRange{init})
+            .result();
 
+    auto res = rewriter
+                   .create<linalg::MatmulOp>(loc, ValueRange{opa, opb},
+                                             ValueRange{zeroes})
+                   .getResult(0);
 
-    // Add opc to the result if applicable.
-    Value res = resultTensor;
     if (!skipC) {
       res = rewriter.create<arith::AddFOp>(loc, res, opc);
     }
@@ -855,7 +835,6 @@ struct MatmulConverter : public OpConversionPattern<triton::DotOp> {
     return success();
   }
 };
-
 
 struct ReduceConverter : public OpConversionPattern<triton::ReduceOp> {
   using OpConversionPattern<triton::ReduceOp>::OpConversionPattern;
