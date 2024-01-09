@@ -40,6 +40,9 @@ def _ttir_to_ttsharedir(mod):
         Path(src_path).write_text(ttir_code)
         triton_shared_opt_path = _get_triton_shared_opt_path()
         subprocess.check_call([triton_shared_opt_path, src_path, "--triton-to-linalg", "-o", dst_path])
+        if os.environ.get('premade'):
+            dst_path="/home/green/code/triton_cpu/third_party/triton_shared/premade/dot.mlir"
+
         return Path(dst_path).read_text()
 
 
@@ -56,6 +59,7 @@ def _ttsharedir_to_llir(ttsharedir: str):
         llir_path = os.path.join(tmpdir, "ll.ir")
         Path(ttshared_path).write_text(ttsharedir)
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
+        print(llmlir_path)
         # TritonShared-MLIR to LLVM-MLIR
         subprocess.check_call([mlir_opt_path, ttshared_path,
             "--convert-linalg-to-affine-loops",
@@ -85,6 +89,7 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--mlir-to-llvmir",
             "-o",
             llir_path])
+        print(llir_path)
         return Path(llir_path).read_text()
 
 
