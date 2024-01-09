@@ -73,7 +73,7 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
-            "--convert-vector-to-llvm",
+             "--convert-vector-to-llvm=enable-arm-sve",  # Adjusted this line
             "--convert-index-to-llvm",
             "--memref-expand",
             "--expand-strided-metadata",
@@ -89,7 +89,6 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--mlir-to-llvmir",
             "-o",
             llir_path])
-        print(llir_path)
         return Path(llir_path).read_text()
 
 

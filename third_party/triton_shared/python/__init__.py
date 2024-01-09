@@ -40,7 +40,7 @@ def _ttir_to_ttsharedir(mod):
         Path(src_path).write_text(ttir_code)
         triton_shared_opt_path = _get_triton_shared_opt_path()
         subprocess.check_call([triton_shared_opt_path, src_path, "--triton-to-linalg", "-o", dst_path])
-        if os.environ['premade']:
+        if os.environ.get('premade'):
             dst_path="/home/green/code/triton_cpu/third_party/triton_shared/premade/dot.mlir"
 
         return Path(dst_path).read_text()
@@ -73,7 +73,7 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
-            "--convert-vector-to-llvm",
+             "--convert-vector-to-llvm=enable-arm-sve",  # Adjusted this line
             "--convert-index-to-llvm",
             "--memref-expand",
             "--expand-strided-metadata",
