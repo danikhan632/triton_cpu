@@ -122,7 +122,7 @@ def _ty_to_cpp(ty):
         "u32": "uint32_t",
         "u64": "uint64_t",
         "fp16": "float",
-        "bf16": "float",
+        "bf16": "bf16",
         "fp32": "float",
         "f32": "float",
         "fp64": "double",
