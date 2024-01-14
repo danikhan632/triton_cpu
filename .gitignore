@@ -11,7 +11,7 @@ python/triton/_C/libtriton.so
 __pycache__/
 *.py[cod]
 .pytest_cache
-
+arm_llvm/sccache/
 # Environments
 .venv
 venv/
