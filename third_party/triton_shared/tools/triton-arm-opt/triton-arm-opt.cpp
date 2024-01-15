@@ -124,9 +124,10 @@ public:
     }
 
     RewritePatternSet patterns(context);
-    patterns.add<ArmMatmulConversion>(context);
     patterns.add<GenericConversion>(context);
-    patterns.add<ConvertArithAddfToArmSVE>(context);
+    // patterns.add<ArmMatmulConversion>(context);
+    
+    // patterns.add<ConvertArithAddfToArmSVE>(context);
 
     (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
   }
