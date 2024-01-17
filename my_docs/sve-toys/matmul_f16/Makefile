@@ -33,8 +33,8 @@ CFLAGS += -march=armv8.4-a+sve2 -O3
 
 COMPFLAGS = -std=c11 -MMD
 
-LDFLAGS = -B$(BIN)
-LDFLAGS += --static --sysroot $(SYSROOT)
+# LDFLAGS = -B$(BIN)
+# LDFLAGS += --static --sysroot $(SYSROOT)
 
 SRC := $(wildcard $(SRCDIR)/*.c)
 

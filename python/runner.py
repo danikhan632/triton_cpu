@@ -3,12 +3,21 @@ import re
 def parse_args(command):
     # Updated regular expression to capture the elements
     lines = command.split('\n')
-
+    before, after  = [], []
+    reached = False
     for line in lines:
         if 'linalg.matmul' in line:
             command=line.strip()
-            break
-    print(command)
+            reached = True
+            
+        if not reached:
+            after.append(line)
+        else:
+            before.append(line)
+
+            
+            
+    # print(command)
     pattern = r'(%\d+)\s*=\s*(\w+\.\w+)\s*ins\(([^)]+)\)\s*outs\(([^)]+)\)\s*->\s*(.+)'
     
     match = re.match(pattern, command)
@@ -31,8 +40,7 @@ def parse_args(command):
                 var_type = None
             input_vars.append(var.strip())
             input_types.append(var_type.strip() if var_type else None)
-
-        return {
+        data={
             "output_var": output_var,
             "operation": operation,
             "input_vars": input_vars,
@@ -40,9 +48,16 @@ def parse_args(command):
             "output_tensor_type": output_tensor_type,
             "return_type": return_type
         }
+        return data, before , after
     else:
         return "No match found"
 
 
 def process(mlir:str):
-    print(parse_args(mlir))
+    op="""
+    """
+
+
+    data, bef, after = parse_args(mlir)
+    
+    

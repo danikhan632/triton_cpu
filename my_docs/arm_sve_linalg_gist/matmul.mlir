@@ -5,5 +5,6 @@
 func.func @matmul(%mat_A_tr: memref<6x8xf32>, %mat_B: memref<6x8xf32>, %mat_C: memref<8x8xf32>) {
   linalg.matmul ins(%mat_A_tr, %mat_B: memref<6x8xf32>, memref<6x8xf32>)
             outs(%mat_C: memref<8x8xf32>)
+            
   return
 }

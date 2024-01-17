@@ -63,6 +63,7 @@ def _ttsharedir_to_llir(ttsharedir: str):
         # TritonShared-MLIR to LLVM-MLIR
         subprocess.check_call([mlir_opt_path, ttshared_path,
             "--convert-linalg-to-affine-loops",
+            "--convert-bufferization-to-memref",
             "--eliminate-empty-tensors",
             "--empty-tensor-to-alloc-tensor",
             "--one-shot-bufferize=allow-return-allocs-from-loops=true",
@@ -80,6 +81,7 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
             "--reconcile-unrealized-casts",
+            
             "-o",
             llmlir_path])
 
