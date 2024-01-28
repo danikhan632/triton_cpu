@@ -141,7 +141,7 @@ scf::ForOp createNewPersistentLoop(scf::ForOp forOp, int numStages,
   // The agentId set of pipelineIdx is the union of agentId sets of all ops in
   // the for loop
   OpBuilderWithAgentIds builder(forOp.getContext());
-  builder.setAgentIdsFromArray(collectAgentIds(forOp));
+  builder.setAgentIdsFromArray(getNestedAgentIds(forOp));
 
   builder.setInsertionPoint(forOp);
   Value numStagesVal =
@@ -210,7 +210,7 @@ scf::ForOp createNewMathLoop(scf::ForOp forOp, int numStages,
   // The agentId set of pipelineIdx is the union of agentId sets of all ops in
   // the for loop
   OpBuilderWithAgentIds builder(forOp.getContext());
-  builder.setAgentIdsFromArray(collectAgentIds(forOp));
+  builder.setAgentIdsFromArray(getNestedAgentIds(forOp));
 
   builder.setInsertionPoint(forOp);
   Value numStagesVal =
@@ -422,7 +422,7 @@ DenseMap<AgentId, scf::ForOp> createForOpsForEachAgentId(scf::ForOp forOp) {
   DenseMap<AgentId, scf::ForOp> agentsToForOp;
 
   // Create newForOp for each agent
-  for (AgentId agentId : collectAgentIds(forOp)) {
+  for (AgentId agentId : getNestedAgentIds(forOp)) {
     auto usedArgs = checkDependencyAndCollectUsedArgs(forOp, agentId,
                                                       blockArgToYieldOperand);
 
@@ -517,7 +517,7 @@ DenseMap<AgentId, scf::IfOp> SpecializeAgentRegion(triton::FuncOp funcOp) {
   DenseMap<AgentId, scf::IfOp> agentsToIfOp;
   DenseMap<AgentId, IRMapping> agentsToIRMappings;
 
-  for (AgentId agentId : collectAgentIds(funcOp)) {
+  for (AgentId agentId : getNestedAgentIds(funcOp)) {
     // Create IfOp for each agentId
     Value cond = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::eq, curAgentId,
@@ -605,8 +605,8 @@ void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
 void reduceChannels(SmallVector<Channel *> &channels,
 
                     DenseMap<Operation *, SmallVector<Channel *>> &map) {
-  // If producers or their consumers has the same convergent comsumer,
-  // and those producers, producers' consumers and the convergent comsumer are
+  // If producers or their consumers has the same convergent consumer,
+  // and those producers, producers' consumers and the convergent consumer are
   // in the same block, They share the same token.
   auto checkConverge = [](Operation *op1, Operation *op2) -> Operation * {
     // Only check level-0 and level-1 convergence, e.g.
@@ -736,7 +736,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       }
       c = c->getParentOp();
     }
-    llvm_unreachable("Falied to find consumer's same level Op with producer");
+    llvm_unreachable("Failed to find consumer's same level Op with producer");
   };
 
   auto consumerReleaseHeutistic = [&](Operation *p,
@@ -765,8 +765,8 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
   auto getAgents = [&](Operation *p, Operation *c, SmallVector<AgentId> &agentP,
                        SmallVector<AgentId> &agentC,
                        SmallVector<AgentId> &agentsPC) -> void {
-    agentP = collectAgentIds(p);
-    agentC = collectAgentIds(c);
+    agentP = getNestedAgentIds(p);
+    agentC = getNestedAgentIds(c);
     agentsPC.reserve(agentP.size() + agentC.size());
     agentsPC.insert(agentsPC.end(), agentP.begin(), agentP.end());
     agentsPC.insert(agentsPC.end(), agentC.begin(), agentC.end());
@@ -786,10 +786,11 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       auto dot = dotOp.getResult();
       auto resTy = dot.getType().dyn_cast<RankedTensorType>();
       auto cArg = dotOp.getOperand(2).dyn_cast<BlockArgument>();
-      if (auto resEnc = resTy.getEncoding().dyn_cast<ttg::MmaEncodingAttr>())
+      if (auto resEnc =
+              resTy.getEncoding().dyn_cast<ttg::NvidiaMmaEncodingAttr>())
         if (resEnc.isHopper() && dot.hasOneUse() &&
             isa<scf::YieldOp>(*dot.getUsers().begin()) && cArg &&
-            cArg.hasOneUse())
+            cArg.hasOneUse() && numStages > 1)
           return dotOp.getOperation();
     }
     return nullptr;
@@ -848,7 +849,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       auto loc = dot.getLoc();
       auto forOp = cvg->getParentOfType<scf::ForOp>();
 
-      auto agentIds = collectAgentIds(dotOp);
+      auto agentIds = getNestedAgentIds(dotOp);
       OpBuilderWithAgentIds builder(dotOp.getContext());
       builder.setAgentIdsFromArray(agentIds);
       builder.setInsertionPoint(dotOp);
@@ -892,7 +893,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       Value result = forOp->getResult(resultIndex);
       auto dotWait = builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(
           forOp.getLoc(), result, 0);
-      result.replaceAllUsesExcept(dotWait.getResult(), dotWait);
+      result.replaceAllUsesExcept(dotWait.getResult(0), dotWait);
 
       // 3. insert ConsumerReleaseOp for outstanding DotAsyncOps
       zero = builder.createWithAgentIds<arith::ConstantIntOp>(loc, 0, 32);
@@ -957,12 +958,13 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
         // Create InsertSliceOp
         builder.setAgentIdsFromOp(loadOp);
         builder.setInsertionPointAfter(loadOp);
-        auto insertSliceOp = builder.createWithAgentIds<ttg::InsertSliceOp>(
-            /*loc=*/loadOp.getLoc(), /*result=*/bufferType,
-            /*src=*/loadOp.getPtr(), /*dst=*/buffer, /*index=*/pipelineIdx,
-            /*mask=*/loadOp.getMask(), /*other=*/loadOp.getOther(),
-            /*cache=*/loadOp.getCache(), /*evict=*/loadOp.getEvict(),
-            /*isVolatile=*/loadOp.getIsVolatile(), /*axis=*/0);
+        auto insertSliceOp =
+            builder.createWithAgentIds<ttg::InsertSliceAsyncOp>(
+                /*loc=*/loadOp.getLoc(), /*result=*/bufferType,
+                /*src=*/loadOp.getPtr(), /*dst=*/buffer, /*index=*/pipelineIdx,
+                /*mask=*/loadOp.getMask(), /*other=*/loadOp.getOther(),
+                /*cache=*/loadOp.getCache(), /*evict=*/loadOp.getEvict(),
+                /*isVolatile=*/loadOp.getIsVolatile(), /*axis=*/0);
 
         // Create ExtractSliceOp
         auto attr = [&](int val) { return builder.getI64IntegerAttr(val); };
@@ -990,9 +992,9 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
 DenseMap<AgentId, Operation *> agentDivision(Operation *backbone) {
   // A general agent division in backbone could be:
   // *  If opWithRegion has results, e.g. scf.for, this opWithRegion will be
-  //    splitted into several new operations, each agent has one, which
+  //    split into several new operations, each agent has one, which
   //    has the part of results related to this agent. One agent could own
-  //    all orginal results or none of them, but one result must belong to
+  //    all original results or none of them, but one result must belong to
   //    one and only one agent.
   // *  if opWithRegions doesn't have result. Simply split for every agent.
   // *  So does operands of opWithRegions
@@ -1052,7 +1054,7 @@ void cloneBackboneForEachAgentId(SmallVector<Operation *> &backbone) {
     // First, agent division
     DenseMap<AgentId, Operation *> agentBackbone = agentDivision(op);
 
-    // Second, remove irrelavant Ops
+    // Second, remove irrelevant Ops
     for (auto kv : agentBackbone) {
       SmallVector<Operation *> deleteOps;
       AgentId targetId = kv.first;
@@ -1109,11 +1111,11 @@ struct WSPipelinePass : public TritonGPUWSPipelineBase<WSPipelinePass> {
        *  | buffer1 = alloc_buffer()                |
        *  | if agent0:                              |
        *  |   scf.for:                              |
-       *  |     producer_aquire token0              |
+       *  |     producer_acquire token0              |
        *  |     buffer0 = tt.load           (load A)|
        *  |     producer_commit token0              |
        *  |     scf.for:                            |
-       *  |       producer_aquire token1            |
+       *  |       producer_acquire token1            |
        *  |       buffer1 = tt.load         (load B)|
        *  |       producer_commit token1            |
        *  | if agent1:                              |
@@ -1145,7 +1147,7 @@ struct WSPipelinePass : public TritonGPUWSPipelineBase<WSPipelinePass> {
       SmallVector<Operation *> backbone = getBackbone(funcOp, channels);
       appendPipelineIdxArgs(backbone, numStages);
 
-      // Create token, buffer and data tranfer between async agents
+      // Create token, buffer and data transfer between async agents
       DenseMap<Channel *, Value> tokenMap = createToken(map, funcOp, numStages);
       DenseMap<Channel *, Value> bufferMap =
           createBuffer(channels, funcOp, numStages);

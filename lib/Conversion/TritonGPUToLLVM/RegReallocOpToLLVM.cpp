@@ -1,8 +1,9 @@
-#include "RegReallocOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace {
 struct RegAllocOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::RegAllocOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -32,11 +33,12 @@ struct RegDeallocOpConversion
     return success();
   }
 };
+} // namespace
 
-void populateRegReallocOpToLLVMPatterns(
+void mlir::triton::populateRegReallocOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const ModuleAllocation &allocation, PatternBenefit benefit) {
+    PatternBenefit benefit) {
   patterns.add<RegAllocOpConversion>(typeConverter, benefit);
   patterns.add<RegDeallocOpConversion>(typeConverter, benefit);
   return;

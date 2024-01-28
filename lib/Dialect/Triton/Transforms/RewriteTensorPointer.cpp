@@ -193,12 +193,12 @@ public:
 class RewriteTensorPointerPass
     : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
 private:
-  int computeCapability;
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
 public:
-  explicit RewriteTensorPointerPass(int computeCapability)
-      : computeCapability(computeCapability) {}
+  explicit RewriteTensorPointerPass(int computeCapability) {
+    this->computeCapability = computeCapability;
+  }
 
   static bool needRewrite(Operation *op) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
@@ -430,8 +430,6 @@ public:
     } else if (auto advanceOp = dyn_cast<triton::AdvanceOp>(op)) {
       return rewriteAdvanceOp(builder, advanceOp, eraser);
     } else if (isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op)) {
-      return rewriteLoadStoreOp(builder, op, eraser);
-    } else if (auto storeOp = dyn_cast<triton::StoreOp>(op)) {
       return rewriteLoadStoreOp(builder, op, eraser);
     } else if (op->getDialect()->getNamespace() == "scf" ||
                op->getDialect()->getNamespace() == "cf") {

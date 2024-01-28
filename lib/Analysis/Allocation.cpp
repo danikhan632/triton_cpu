@@ -19,7 +19,8 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::MfmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -35,12 +36,14 @@ constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
+  auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
-  auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
+  auto dstMmaLayout = dstLayout.dyn_cast<NvidiaMmaEncodingAttr>();
   auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
-  assert(!(srcMmaLayout && dstMmaLayout) &&
-         "Unexpected mma -> mma layout conversion");
+
+  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
+         "mma -> mma layout conversion is only supported on Ampere");
+
   // mma or dot layout does not have an order, so the order depends on the
   // layout of the other operand.
   auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
@@ -63,12 +66,13 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   }
 
   // MmaToDotShortcut and MmaToMmaShortcut doesn't use shared mem
-  if (auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+  if (auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     if (dstLayout.isa<DotOperandEncodingAttr>()) {
       if (isMmaToDotShortcut(srcTy, dstTy)) {
         return {};
       }
-    } else if (auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
+    } else if (auto dstMmaLayout =
+                   dstLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
         return {};
       }
@@ -104,15 +108,35 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
+  if (srcLayout.isa<MfmaEncodingAttr>() &&
+      srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
+      dstLayout.isa<DotOperandEncodingAttr>())
+    if (isMfmaToDotShortcut(srcTy, dstTy))
+      return {};
+
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  unsigned srcContigPerThread =
-      getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
-  outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
+  auto srcContigPerThread =
+      getUniqueContigPerThread(srcLayout, srcTy.getShape());
+  auto dstContigPerThread =
+      getUniqueContigPerThread(dstLayout, dstTy.getShape());
+
+  // We're going to do two shared memory operations:
+  //
+  //  - write from src into scratch (vectorized according to inVec)
+  //  - read from scratch into dst (vectorized according to outVec)
+  //
+  // scratch has the same layout as dst, so the reads (outVec) can be vectorized
+  // if we have N consecutive elements in dst/scratch.
+  //
+  // But writes to scratch (inVec) can be vectorized only if we have N
+  // consecutive elements in src *and* those elements go into N consecutive
+  // elements in scratch.
+  //
+  // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
+  // might be able to merge the few most-minor dimensions and get a larger
+  // vector.
+  inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
+  outVec = dstContigPerThread[outOrd[0]];
 
   if (repShape.size() <= 1)
     return repShape;
@@ -126,7 +150,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 }
 
 SmallVector<unsigned>
-getScratchConfigForStoreAsync(triton::nvidia_gpu::StoreAsyncOp op) {
+getScratchConfigForStoreAsync(triton::nvidia_gpu::StoreAsyncTMAOp op) {
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
 }
@@ -187,7 +211,7 @@ private:
     // XXX(Keren): Why this hard-coded alignment?
     size_t kAlignment = 8;
     for (Value result : op->getResults()) {
-      if (triton::gpu::isSharedEncoding(result)) {
+      if (triton::gpu::hasSharedEncoding(result)) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto tensorType = result.getType().dyn_cast<RankedTensorType>();
@@ -241,6 +265,14 @@ private:
       unsigned bytes = helper.getScratchSizeInBytes();
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
+    } else if (auto histogram = dyn_cast<triton::HistogramOp>(op)) {
+      auto dstTy = histogram.getResult().getType().cast<RankedTensorType>();
+      int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+          op->getParentOfType<ModuleOp>());
+      auto bytes = std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
+                   std::max<int>(8, dstTy.getElementTypeBitWidth()) / 8;
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
+                                                          scratchAlignment);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
       auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
@@ -267,10 +299,10 @@ private:
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
     } else if (auto storeAsyncOp =
-                   dyn_cast<triton::nvidia_gpu::StoreAsyncOp>(op)) {
+                   dyn_cast<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
       auto srcTy = storeAsyncOp.getSrc().getType().cast<RankedTensorType>();
       auto srcEncoding = srcTy.getEncoding();
-      if (!srcEncoding.isa<MmaEncodingAttr>()) {
+      if (!srcEncoding.isa<NvidiaMmaEncodingAttr>()) {
         return;
       }
       auto smemShape = getScratchConfigForStoreAsync(storeAsyncOp);
@@ -298,17 +330,23 @@ private:
                                                             scratchAlignment);
       }
     } else if (auto atomicCASOp = dyn_cast<triton::AtomicCASOp>(op)) {
+      // only scalar requires scratch memory
+      // make it explicit for readability
       auto value = op->getOperand(0);
-      auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
-      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
-      auto elemTy =
-          value.getType().cast<triton::PointerType>().getPointeeType();
-      auto bytes = elemTy.isa<triton::PointerType>()
-                       ? elems * kPtrBitWidth / 8
-                       : elems * elemTy.getIntOrFloatBitWidth() / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
+      if (value.getType().dyn_cast<RankedTensorType>()) {
+        // nothing to do
+      } else {
+        auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
+        unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
+                                         std::multiplies{});
+        auto elemTy =
+            value.getType().cast<triton::PointerType>().getPointeeType();
+        auto bytes = elemTy.isa<triton::PointerType>()
+                         ? elems * kPtrBitWidth / 8
+                         : elems * elemTy.getIntOrFloatBitWidth() / 8;
+        maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
+                                                            scratchAlignment);
+      }
     } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
       auto callable = callOp.resolveCallable();
       auto funcOp = dyn_cast<FunctionOpInterface>(callable);
@@ -395,7 +433,7 @@ private:
   /// allocated, but is used to store intermediate results.
   void resolveScratchBufferLiveness(
       const DenseMap<Operation *, size_t> &operationId) {
-    // Analyze liveness of scratch buffers and vritual buffers.
+    // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
       for (auto opScratchIter : container) {
         // Any scratch memory's live range is the current operation's live
@@ -435,6 +473,7 @@ private:
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
+      // TODO(Keren): Investigate mbarrier and figure out how to clean this up
       // Shared memory allocated by mbarrier cannot be reused
       if (value.getDefiningOp() &&
           isa<triton::nvidia_gpu::AllocMBarrierOp>(value.getDefiningOp()))

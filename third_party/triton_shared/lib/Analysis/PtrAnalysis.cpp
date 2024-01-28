@@ -20,12 +20,25 @@ namespace mlir {
 
 namespace triton {
 
+static void assertValidUnrealizedCast(UnrealizedConversionCastOp op) {
+  assert(op && op->hasAttr(ModuloState::WraparoundAttr) &&
+         op.getInputs().size() == 3 &&
+         op.getInputs()[0].getDefiningOp<memref::ReinterpretCastOp>() &&
+         op.getInputs()[1].getDefiningOp<memref::ReinterpretCastOp>() &&
+         op.getInputs()[2].getDefiningOp<triton::AddPtrOp>());
+}
+
 MemRefType PtrState::getResultMemrefType(MLIRContext *context, int64_t offset,
-                                         ArrayRef<int64_t> resultShape) const {
+                                         ArrayRef<int64_t> resultShape,
+                                         bool useDynamicStrides) const {
 
   SmallVector<int64_t> staticStrides;
-  SmallVector<Value> dynamicStrides;
-  dispatchIndexOpFoldResults(strides, dynamicStrides, staticStrides);
+  if (useDynamicStrides) {
+    staticStrides.append(strides.size(), ShapedType::kDynamic);
+  } else {
+    SmallVector<Value> dynamicStrides;
+    dispatchIndexOpFoldResults(strides, dynamicStrides, staticStrides);
+  }
 
   auto elementType = source.getType().cast<BaseMemRefType>().getElementType();
   auto layout =
@@ -188,7 +201,8 @@ PtrState::createStackedCastOps(ArrayRef<int64_t> resultShape,
                                 // the same as the original row. The last chunk
                                 // may be smaller due to wrapping around.
           resultShape[1],       // Col stays the same.
-      });
+      },
+      true /*useDynamicStrides*/);
 
   Value rowSize = ofrToIndexValue(sizes[0], loc, rewriter);
   Value colSize = ofrToIndexValue(sizes[1], loc, rewriter);
@@ -279,7 +293,8 @@ PtrState::createSideBySideCastOps(ArrayRef<int64_t> resultShape,
           ShapedType::kDynamic // Column is dynamic, in most cases, this should
                                // be the same as the original column. The last
                                // chunk may be smaller due to wrapping around.
-      });
+      },
+      true /*useDynamicStrides*/);
 
   Value rowSize = ofrToIndexValue(sizes[0], loc, rewriter);
   Value colSize = ofrToIndexValue(sizes[1], loc, rewriter);
@@ -287,22 +302,24 @@ PtrState::createSideBySideCastOps(ArrayRef<int64_t> resultShape,
   Value modN = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(),
                                                    modulos[1]->size);
 
-  SmallVector<Value> strideVals = ofrsToIndexValues(strides, loc, rewriter);
-
   Value x = rewriter.create<arith::RemSIOp>(loc, targetOffset, modN);
   Value y = rewriter.create<arith::SubIOp>(loc, targetOffset, x);
+
+  SmallVector<Value> strideVals = ofrsToIndexValues(strides, loc, rewriter);
 
   // First chunk
   Value nextOffset = rewriter.create<arith::AddIOp>(loc, x, colSize);
   Value clampedOffset = rewriter.create<arith::MinSIOp>(loc, nextOffset, modN);
   Value d1 = rewriter.create<arith::SubIOp>(loc, clampedOffset, x);
   SmallVector<Value> sizes1{rowSize, d1};
+
   auto cast1 = rewriter.create<memref::ReinterpretCastOp>(
       loc, resultType, source, targetOffset, sizes1, strideVals);
 
   // Second chunk
   Value d2 = rewriter.create<arith::SubIOp>(loc, colSize, d1);
   SmallVector<Value> sizes2{rowSize, d2};
+
   auto cast2 = rewriter.create<memref::ReinterpretCastOp>(
       loc, resultType, source, y, sizes2, strideVals);
 
@@ -364,16 +381,46 @@ void PtrAnalysis::visitOperandRem(
     ConversionPatternRewriter &rewriter,
     const llvm::SmallDenseMap<Value, PtrState> &knownPtrs) {
   assert(state.isEmpty());
-  visitOperand(remOp.getLhs(), state, loc, rewriter, knownPtrs);
-  assert(state.getRank() == 1 && !state.modulos.back().has_value() &&
-         "No support for multiple modulos within an expression");
 
   PtrState rhsState;
   visitOperand(remOp.getRhs(), rhsState, loc, rewriter, knownPtrs);
   assert(rhsState.scalar);
-  rhsState.scalar.dump();
 
-  state.modulos.back() = ModuloState(rhsState.scalar, rewriter.getIndexAttr(0));
+  visitOperand(remOp.getLhs(), state, loc, rewriter, knownPtrs);
+
+  // If there are multiple modulo ops on an expression (e.g.: (a % b) % c), we
+  // would have already populated the modulo states after visiting the lhs.
+  // Assert that all the modulo states are empty.
+  assert(llvm::all_of(state.modulos,
+                      [](auto modState) { return !modState.has_value(); }) &&
+         "No support for multiple modulo within an expression");
+
+  if (state.getRank() == 1) {
+    // Apply the modulo before expanding shape, the common pattern is
+    // offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    // a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] *
+    // stride_ak)
+    state.modulos.back() = ModuloState{rhsState.scalar};
+  } else if (state.getRank() == 2) {
+    // torch inductor expands the tensor shape before applying the modulo.
+    //
+    // We only support either:
+    // - (tl.arange(0, end)[:, None] % mod), or
+    // - (tl.arange(0, end)[None, :] % mod)
+    //
+    // In both cases, we apply the modulo to the non-singleton dimension.
+    auto shape = cast<TensorType>(remOp.getResult().getType()).getShape();
+    if (shape[0] == 1) {
+      state.modulos[1] = ModuloState{rhsState.scalar};
+    } else if (shape[1] == 1) {
+      state.modulos[0] = ModuloState{rhsState.scalar};
+    } else {
+      assert(false && "Taking modulo on a 2D tensor with no singleton "
+                      "dimension not supported");
+    }
+  } else {
+    assert(false && "Unsupported modulo pattern");
+  }
 }
 
 void PtrAnalysis::visitOperandMakeRange(
@@ -387,6 +434,8 @@ void PtrAnalysis::visitOperandMakeRange(
   auto start = rangeOp.getStart();
   auto end = rangeOp.getEnd();
   auto stride = (end - start + shape[0] - 1) / shape[0];
+  assert(stride == 1 &&
+         "Expect make_range op to always return tensor of stride 1");
 
   state.offsets.push_back(rewriter.getIndexAttr(start));
   state.sizes.push_back(rewriter.getIndexAttr(shape[0]));
@@ -860,37 +909,18 @@ void PtrAnalysis::rewriteYieldOp(
   for (auto [i, v] : llvm::enumerate(adaptor.getOperands())) {
     if (auto mappedV = rewriter.getRemappedValue(v)) {
       // If this value is a tensor of pointers produced by AddPtrOp,
-      // TritonTypeConverter should have converted to MemRefType without
-      // layout information. Since it doesn't match with the MemRefType
-      // that we produced in rewriteAddptrOp (which is in canonical form
-      // with layout information), an unrealized_conversion_cast should
-      // have been added. We need to trace it back through this
-      // unrealized_conversion_cast to get the original reinterpret_cast.
-      // Also see comments in TritonTypeConverter::addConversion.
-      //
-      // For TritonToLinalg, we do not use any TypeConverters, hence we
-      // can access the reinterpret_cast directly.
+      // we should have already converted to a ReinterpretCastOp without
+      // layout information for the normal cases, or to an
+      // UnrealizedConversionCastOp for the split pointer case.
       if (v.getDefiningOp<triton::AddPtrOp>() ||
           v.getDefiningOp<triton::AdvanceOp>() ||
           v.getDefiningOp<triton::MakeTensorPtrOp>()) {
         if (auto castOp = mappedV.getDefiningOp<UnrealizedConversionCastOp>()) {
+          assertValidUnrealizedCast(castOp);
           auto castInputs = castOp.getInputs();
-
-          assert((castInputs.size() == 1 ||
-                  castOp->hasAttr(ModuloState::WraparoundAttr)) &&
-                 "only expect 1:1 mapping for "
-                 "unrealized_conversion_cast that "
-                 "were "
-                 "automatically inserted during legalizing");
-
-          if (castOp->hasAttr(ModuloState::WraparoundAttr)) {
-            v = castOp.getResult(0);
-            operands[i] = castInputs[0];
-            moduloSecondChunks.push_back(castInputs[1]);
-          } else {
-            v = castInputs[0];
-          }
-
+          v = castOp.getResult(0);
+          operands[i] = castInputs[0];
+          moduloSecondChunks.push_back(castInputs[1]);
         } else if (auto castOp =
                        mappedV.getDefiningOp<memref::ReinterpretCastOp>()) {
           v = castOp;
@@ -937,6 +967,7 @@ void PtrAnalysis::rewriteYieldOp(
       visitOperandReintCast(reintCastOp, state, op.getLoc(), rewriter,
                             knownPtrs);
     } else if (unrealizedCastOp) {
+      assertValidUnrealizedCast(unrealizedCastOp);
       visitOperandUnrealizedCast(unrealizedCastOp, state, op.getLoc(), rewriter,
                                  knownPtrs);
     } else {
@@ -998,11 +1029,7 @@ void PtrAnalysis::visitOperandUnrealizedCast(
     UnrealizedConversionCastOp op, PtrState &state, const Location loc,
     ConversionPatternRewriter &rewriter,
     const llvm::SmallDenseMap<Value, PtrState> &knownPtrs) {
-  assert(op->hasAttr(ModuloState::WraparoundAttr) &&
-         op.getInputs().size() == 3 &&
-         op.getInputs()[0].getDefiningOp<memref::ReinterpretCastOp>() &&
-         op.getInputs()[1].getDefiningOp<memref::ReinterpretCastOp>() &&
-         op.getInputs()[2].getDefiningOp<triton::AddPtrOp>());
+  assertValidUnrealizedCast(op);
 
   auto origPtr = op.getInputs()[2];
   if (knownPtrs.contains(origPtr)) {
@@ -1051,23 +1078,6 @@ void PtrAnalysis::rewriteForOp(
   // Create a new list of init args
   for (auto [i, arg] : llvm::enumerate(op.getInitArgs())) {
     auto mappedV = rewriter.getRemappedValue(arg);
-
-    // Trace back the original value. See comments in rewriteYieldOp.
-    // This block is unreachable for TritonToLinalg because we don't use
-    // TypeConverters.
-    if (mappedV && mappedV.getDefiningOp<UnrealizedConversionCastOp>()) {
-      auto castOp = mappedV.getDefiningOp<UnrealizedConversionCastOp>();
-      if (!castOp->hasAttr(ModuloState::WraparoundAttr)) {
-        assert(castOp && "expected unrealized_conversion_cast");
-        auto castInputs = castOp.getInputs();
-        assert(castInputs.size() == 1 &&
-               "only expect 1:1 mapping for unrealized_conversion_cast "
-               "that "
-               "were automatically inserted during legalizing");
-        mappedV = castInputs[0];
-      }
-    }
-
     memref::ReinterpretCastOp reintCastOp;
     UnrealizedConversionCastOp unrealizedCastOp;
 
@@ -1087,10 +1097,9 @@ void PtrAnalysis::rewriteForOp(
         newInitArgs.push_back(mappedV);
       } else if (auto op =
                      mappedV.getDefiningOp<UnrealizedConversionCastOp>()) {
-        assert(op->hasAttr(ModuloState::WraparoundAttr));
+        assertValidUnrealizedCast(op);
         unrealizedCastOp = op;
         auto inputs = unrealizedCastOp.getInputs();
-        assert(inputs.size() == 3);
 
         SmallVector<ModuloChunkInitArg> initArgData{
             ModuloChunkInitArg{inputs[0], i},
@@ -1254,16 +1263,7 @@ void PtrAnalysis::rewriteForOp(
         for (auto &[unrealizedCastOp, chunkData, state] : moduloStates) {
           SmallVector<Value> newReinterpretCasts;
           for (auto &chunk : chunkData) {
-            auto initReintCast =
-                chunk.reinterpretCast
-                    .getDefiningOp<memref::ReinterpretCastOp>();
-
-            auto newReintCast = b.create<memref::ReinterpretCastOp>(
-                loc, initReintCast.getResult().getType(),
-                args[chunk.initArgIndex], zero, initReintCast.getSizes(),
-                initReintCast.getStrides());
-
-            newReinterpretCasts.push_back(newReintCast);
+            newReinterpretCasts.push_back(args[chunk.initArgIndex]);
           }
 
           auto combinedCast = b.create<UnrealizedConversionCastOp>(
@@ -1341,19 +1341,11 @@ Value PtrAnalysis::getScalarMemRef(Value ptr, Value memRef, const Location loc,
   assert(ptr.getType().cast<triton::PointerType>() &&
          "expected scalar pointer");
 
-  // If pointer is generated by tt.addptr, TypeConverter will have inserted an
-  // unrealized conversion cast for ptr to cast its type from tt.ptr to unranked
-  // memref. Input of this cast is the actual source memref.
-  //
-  // For TritonToLinalg, we can access the reinterpret_cast directly due to no
-  // usages of TypeConverters.
+  // If the pointer is generated by tt.addptr, we will have already inserted an
+  // ReinterpretCastOp to cast its type from tt.ptr to unranked memref. Return
+  // the result.
   if (ptr.getDefiningOp<triton::AddPtrOp>()) {
-    if (auto uCast = memRef.getDefiningOp<UnrealizedConversionCastOp>()) {
-      assert(uCast && "expected unrealized conversion inserted by type "
-                      "converter not found");
-      return uCast.getInputs()[0];
-    } else if (auto castOp =
-                   memRef.getDefiningOp<memref::ReinterpretCastOp>()) {
+    if (auto castOp = memRef.getDefiningOp<memref::ReinterpretCastOp>()) {
       return castOp.getResult();
     } else {
       llvm_unreachable("pointer value is defined by an unexpected op");

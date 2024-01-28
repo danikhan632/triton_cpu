@@ -4,9 +4,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
-
 from . import language as tl
-from ._C.libtriton.triton import runtime
 
 
 def nvsmi(attrs):
@@ -78,10 +76,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     return torch.mean(torch.tensor(ret)).item()
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
-             quantiles=None,
-             fast_flush=True,
-             return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean"):
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
     """
@@ -261,11 +256,13 @@ class Benchmark:
 
 
 class Mark:
+
     def __init__(self, fn, benchmarks):
         self.fn = fn
         self.benchmarks = benchmarks
 
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, **kwrags):
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
+             save_precision=6, **kwrags):
         import os
 
         import matplotlib.pyplot as plt
@@ -321,24 +318,40 @@ class Mark:
             if save_path:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
         df = df[x_names + bench.line_names]
+        if diff_col and df.shape[1] == 2:
+            col0, col1 = df.columns.tolist()
+            df['Diff'] = df[col1] - df[col0]
+
         if print_data:
             print(bench.plot_name + ':')
             print(df)
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
+                      index=False)
+        return df
 
-    def run(self, show_plots=False, print_data=False, save_path='', **kwargs):
+    def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
+        result_dfs = []
         if save_path:
+            # Create directory if it doesn't exist
+            os.makedirs(save_path, exist_ok=True)
             html = open(os.path.join(save_path, "results.html"), "w")
             html.write("<html><body>\n")
         for bench in benchmarks:
-            self._run(bench, save_path, show_plots, print_data, **kwargs)
+            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
             if save_path:
                 html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
         if save_path:
             html.write("</body></html>\n")
+            html.close()
+        if return_df:
+            if has_single_bench:
+                return result_dfs[0]
+            else:
+                return result_dfs
+        return None
 
 
 def perf_report(benchmarks):
@@ -352,31 +365,27 @@ def perf_report(benchmarks):
     return wrapper
 
 
-def get_dram_gbps(backend=None, device=None):
+def get_dram_gbps(device=None):
     ''' return DRAM bandwidth in GB/s '''
     import torch
 
     from .runtime import driver
-    if not backend:
-        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    mem_clock_khz = driver.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
-    bus_width = driver.utils.get_device_properties(device)["mem_bus_width"]
+    mem_clock_khz = driver.active.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
+    bus_width = driver.active.utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
 
 
-def get_max_tensorcore_tflops(dtype, clock_rate, backend=None, device=None):
+def get_max_tensorcore_tflops(dtype, clock_rate, device=None):
     import torch
 
     from .runtime import driver
-    if not backend:
-        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
+    num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         assert dtype == torch.float16
@@ -393,12 +402,15 @@ def get_max_tensorcore_tflops(dtype, clock_rate, backend=None, device=None):
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
 
+
 # create decorator that wraps test function into
 # a cuda-memcheck system call
 
 
 def cuda_memcheck(**target_kwargs):
+
     def decorator(test_fn):
+
         @functools.wraps(test_fn)
         def wrapper(*args, **kwargs):
             import psutil
@@ -416,7 +428,9 @@ def cuda_memcheck(**target_kwargs):
                 assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
             else:
                 test_fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -424,22 +438,18 @@ def cuda_memcheck(**target_kwargs):
 def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
     try:
         subprocess.check_output(["nvidia-smi", "-i", "0", "-pm", "1"])
-        subprocess.check_output(
-            [
-                "nvidia-smi",
-                "-i",
-                "0",
-                f"--lock-gpu-clocks={ref_sm_clock},{ref_sm_clock}",
-            ]
-        )
-        subprocess.check_output(
-            [
-                "nvidia-smi",
-                "-i",
-                "0",
-                f"--lock-memory-clocks={ref_mem_clock},{ref_mem_clock}",
-            ]
-        )
+        subprocess.check_output([
+            "nvidia-smi",
+            "-i",
+            "0",
+            f"--lock-gpu-clocks={ref_sm_clock},{ref_sm_clock}",
+        ])
+        subprocess.check_output([
+            "nvidia-smi",
+            "-i",
+            "0",
+            f"--lock-memory-clocks={ref_mem_clock},{ref_mem_clock}",
+        ])
         cur_sm_clock = nvsmi(["clocks.current.sm"])[0]
         cur_mem_clock = nvsmi(["clocks.current.memory"])[0]
         assert abs(cur_sm_clock - ref_sm_clock) < 10, f"GPU SMs must run at {ref_sm_clock} MHz"
@@ -453,16 +463,14 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
         subprocess.check_output(["nvidia-smi", "-i", "0", "-rmc"])
 
 
-def get_max_simd_tflops(dtype, clock_rate, backend=None, device=None):
+def get_max_simd_tflops(dtype, clock_rate, device=None):
     import torch
 
     from .runtime import driver
-    if not backend:
-        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
+    num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         if dtype == torch.float32:

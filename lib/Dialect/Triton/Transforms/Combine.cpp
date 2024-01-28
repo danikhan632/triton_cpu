@@ -5,14 +5,16 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
 #include <memory>
 
-using namespace mlir;
-
 namespace {
+
+using namespace mlir;
+using namespace mlir::triton;
 
 bool isZero(mlir::Value val) {
   if (mlir::matchPattern(val, mlir::m_Zero()) ||
@@ -52,10 +54,8 @@ using FastMathFlags = arith::FastMathFlags;
 
 #include "TritonCombine.inc"
 
-} // anonymous namespace
-
-// select(cond, load(ptrs, broadcast(cond), ???), other)
-//   => load(ptrs, broadcast(cond), other)
+// select(cond, load(ptrs, splat(cond), ???), other)
+//   => load(ptrs, splat(cond), other)
 class CombineSelectMaskedLoadPattern : public mlir::RewritePattern {
 public:
   CombineSelectMaskedLoadPattern(mlir::MLIRContext *context)
@@ -82,14 +82,13 @@ public:
     if (!mask)
       return mlir::failure();
 
-    auto *broadcastOpCandidate = mask.getDefiningOp();
-    auto broadcastOp =
-        llvm::dyn_cast_or_null<triton::BroadcastOp>(broadcastOpCandidate);
-    if (!broadcastOp)
+    auto *splatOpCandidate = mask.getDefiningOp();
+    auto splatOp = llvm::dyn_cast_or_null<triton::SplatOp>(splatOpCandidate);
+    if (!splatOp)
       return mlir::failure();
 
-    auto broadcastCond = broadcastOp.getSrc();
-    if (broadcastCond != condSelect)
+    auto splatCond = splatOp.getSrc();
+    if (splatCond != condSelect)
       return mlir::failure();
 
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
@@ -188,6 +187,42 @@ public:
   }
 };
 
+// transpose(x, order=[0, 1, ...]) -> x
+class CombineNopTransPattern : public OpRewritePattern<TransOp> {
+public:
+  CombineNopTransPattern(mlir::MLIRContext *context)
+      : OpRewritePattern(context) {}
+
+  LogicalResult matchAndRewrite(TransOp trans,
+                                PatternRewriter &rewriter) const {
+    auto order = trans.getOrder();
+    for (int32_t i = 0; i < order.size(); i++) {
+      if (order[i] != i)
+        return failure();
+    }
+    rewriter.replaceAllUsesWith(trans, trans.getOperand());
+    return success();
+  }
+};
+
+// transpose(transpose(x)) -> transpose(x)
+class CombineNestedTransPattern : public OpRewritePattern<TransOp> {
+public:
+  CombineNestedTransPattern(MLIRContext *context) : OpRewritePattern(context) {}
+
+  mlir::LogicalResult matchAndRewrite(TransOp outer,
+                                      PatternRewriter &rewriter) const {
+    auto inner = outer.getOperand().getDefiningOp<TransOp>();
+    if (!inner)
+      return failure();
+
+    auto order = rewriter.replaceOpWithNewOp<TransOp>(
+        outer, inner.getOperand(),
+        applyPermutation(inner.getOrder(), outer.getOrder()));
+    return success();
+  }
+};
+
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
@@ -208,11 +243,15 @@ public:
     // patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
+    patterns.add<CombineNopTransPattern>(context);
+    patterns.add<CombineNestedTransPattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
 };
+
+} // anonymous namespace
 
 std::unique_ptr<mlir::Pass> mlir::triton::createCombineOpsPass() {
   return std::make_unique<CombineOpsPass>();

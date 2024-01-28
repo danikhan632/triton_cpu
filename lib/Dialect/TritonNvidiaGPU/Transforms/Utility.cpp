@@ -88,9 +88,8 @@ LogicalResult getDependentPointers(Value ptr, DenseSet<Value> &dependentSet,
     auto parentOp = blockArg.getOwner()->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
       if (blockArg.getArgNumber() >= forOp.getNumInductionVars()) {
-        if (failed(getDependentPointers(
-                forOp.getOpOperandForRegionIterArg(blockArg).get(),
-                dependentSet, processedSet)))
+        if (failed(getDependentPointers(forOp.getTiedLoopInit(blockArg)->get(),
+                                        dependentSet, processedSet)))
           return failure();
 
         unsigned operandIdx =
@@ -116,9 +115,6 @@ LogicalResult getDependentPointers(Value ptr, DenseSet<Value> &dependentSet,
     return getDependentPointers(advanceOp.getPtr(), dependentSet, processedSet);
   } else if (auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>()) {
     return getDependentPointers(addPtrOp.getPtr(), dependentSet, processedSet);
-  } else if (auto loadOp = ptr.getDefiningOp<triton::AddPtrOp>()) {
-    // not support load dependent ptr
-    return failure();
   } else if (auto forOp = ptr.getDefiningOp<scf::ForOp>()) {
     unsigned idx = ptr.cast<OpResult>().getResultNumber();
     return getDependentPointers(
@@ -297,7 +293,7 @@ void setAgentIds(Operation *op, ArrayRef<AgentId> agentIds) {
   op->setAttr("async_agent", DenseIntElementsAttr::get(vecTy, sortedAgentIds));
 }
 
-SmallVector<AgentId> collectAgentIds(Operation *op) {
+SmallVector<AgentId> getNestedAgentIds(Operation *op) {
   SetVector<AgentId> agentIds;
   op->walk([&](Operation *curOp) {
     for (AgentId agentId : getAgentIds(curOp))
@@ -383,7 +379,7 @@ LogicalResult getDependentValues(Value val, DenseSet<Value> &depSet,
       if (failed(addControlOperandsForForOp(forOp)))
         return failure();
       if (blockArg.getArgNumber() >= forOp.getNumInductionVars()) {
-        Value operand = forOp.getOpOperandForRegionIterArg(blockArg).get();
+        Value operand = forOp.getTiedLoopInit(blockArg)->get();
         if (failed(tryInsertAndPropagate(operand)))
           return failure();
 

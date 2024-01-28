@@ -3,6 +3,15 @@
 
 include "mlir/Pass/PassBase.td"
 
+def DecomposeUnsupportedConversions : Pass<"decompose-unsupported-conversions", "mlir::ModuleOp"> {
+    let summary = "Decompose conversions that are not supported by TritonGPU -> LLVM";
+    let constructor = "mlir::triton::gpu::createDecomposeUnsupportedConversionsPass()";
+}
+
+def AllocateSharedMemory : Pass<"allocate-shared-memory", "mlir::ModuleOp"> {
+    let summary = "Add metadata for shared memory allocation";
+    let constructor = "mlir::triton::gpu::createAllocateSharedMemoryPass()";
+}
 
 def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert TritonGPU to LLVM";
@@ -20,7 +29,6 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                             "mlir::ROCDL::ROCDLDialect",
                              "mlir::NVVM::NVVMDialect"];
 
     let options = [

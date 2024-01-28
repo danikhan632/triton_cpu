@@ -3,8 +3,11 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
 #include <fstream>
 
 namespace mlir {
@@ -226,14 +229,16 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "green";
     else if (layout.isa<triton::gpu::SliceEncodingAttr>())
       return "yellow";
-    else if (layout.isa<triton::gpu::MmaEncodingAttr>())
+    else if (layout.isa<triton::gpu::NvidiaMmaEncodingAttr>())
       return "lightslateblue";
     else if (layout.isa<triton::gpu::DotOperandEncodingAttr>())
       return "orange";
     else if (layout.isa<triton::gpu::SharedEncodingAttr>())
       return "orangered";
-    else
-      assert(0 && "Unrecognized layout");
+    else {
+      llvm::report_fatal_error("Unrecognized layout");
+      return "unknown";
+    }
   } else {
     return "white";
   }
@@ -256,6 +261,27 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
+static std::optional<Attribute>
+inferDstEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
+  // Same as src encoding, except the last dim has 2x the elements per thread.
+  auto ctx = op->getContext();
+  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!enc)
+    return std::nullopt;
+
+  // Precondition for the interleave op in general: The last dim is also the
+  // most minor dim (i.e. it occurs first in `order`).
+  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
+    return std::nullopt;
+
+  auto newSizePerThread = enc.getSizePerThread();
+  newSizePerThread[newSizePerThread.size() - 1] *= 2;
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
+      enc.getOrder(), enc.getCTALayout());
+}
+
 static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
                                                  Attribute encoding) {
   auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
@@ -272,24 +298,108 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
+static std::optional<Attribute>
+inferSrcEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
+  // Same as dst encoding, except the last dim has half the elements per thread.
+  auto ctx = op->getContext();
+  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!enc)
+    return std::nullopt;
+
+  // Precondition for the interleave op in general: The last dim is also the
+  // most minor dim (i.e. it occurs first in `order`).
+  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
+    return std::nullopt;
+
+  if (enc.getSizePerThread()[enc.getSizePerThread().size() - 1] % 2 != 0)
+    return std::nullopt;
+
+  auto newSizePerThread = enc.getSizePerThread();
+  newSizePerThread[newSizePerThread.size() - 1] /= 2;
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
+      enc.getOrder(), enc.getCTALayout());
+}
+
+static std::optional<Attribute>
+inferTransOpDstEncoding(Attribute srcEnc, ArrayRef<int32_t> order) {
+  // Simply forward to the existing inferTransOpEncoding function.
+  Attribute retEncoding;
+  if (succeeded(
+          srcEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferTransOpEncoding(srcEnc, order, retEncoding))) {
+    return retEncoding;
+  }
+  return std::nullopt;
+}
+
+static std::optional<Attribute> inferDstEncoding(triton::TransOp op,
+                                                 Attribute encoding) {
+  return inferTransOpDstEncoding(encoding, op.getOrder());
+}
+
+static std::optional<Attribute> inferSrcEncoding(triton::TransOp op,
+                                                 Attribute encoding) {
+  // We want to solve for srcEnc in
+  //   transpose(srcEnc, order) -> dstEnc.
+  // Given the identity
+  //   transpose(transpose(x, order), inverse(order)) == x,
+  // we can see this is equivalent to
+  //   transpose(dstEnc, inverse(order)) -> srcEnc.
+  return inferTransOpDstEncoding(encoding,
+                                 triton::inversePermutation(op.getOrder()));
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::Elementwise>() ||
+      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp>(op)) {
+    return encoding;
+  }
+
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
-  if (isa<triton::ViewOp, triton::CatOp>(op))
-    return std::nullopt;
-  return encoding;
+  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
+    return inferSrcEncoding(interleave, encoding);
+  if (auto trans = dyn_cast<triton::TransOp>(op))
+    return inferSrcEncoding(trans, encoding);
+
+  return std::nullopt;
 }
 
 std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
+  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+      op->hasTrait<mlir::OpTrait::Elementwise>() ||
+      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp>(op))
+    return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
-  if (isa<triton::ViewOp, triton::CatOp>(op))
-    return std::nullopt;
-  return encoding;
+  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
+    return inferDstEncoding(interleave, encoding);
+  if (auto trans = dyn_cast<triton::TransOp>(op))
+    return inferDstEncoding(trans, encoding);
+  return std::nullopt;
+}
+
+bool isSingleValue(Value value) {
+  // Don't consider load as expensive if it is loading a scalar.
+  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())
+    return tensorTy.getNumElements() == 1;
+  // TODO: Handle other cases.
+  // For example, when ptr is a tensor of single value.
+  // It means that ptr is a resultant of broadcast or generated through
+  // a chain of broadcast and other operations.
+  // Rematerialize it without considering contiguous memory access pattern is
+  // fine.
+  return true;
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
@@ -334,7 +444,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
                                         targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    if (targetEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
+    if (targetEncoding.isa<triton::gpu::NvidiaMmaEncodingAttr>()) {
       auto srcEncoding =
           convert.getOperand().getType().cast<RankedTensorType>().getEncoding();
       if (targetEncoding != srcEncoding)
@@ -342,11 +452,43 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     }
     return true;
   }
+
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+    auto reshapeDstType = reshape.getType().cast<RankedTensorType>();
+    RankedTensorType newDstType =
+        RankedTensorType::get(reshapeDstType.getShape(),
+                              reshapeDstType.getElementType(), targetEncoding);
+    return reshape.getAllowReorder() &&
+           !reshape.getEfficientLayout().has_value() &&
+           !triton::gpu::isExpensiveView(reshape.getOperand().getType(),
+                                         newDstType);
+  }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::ViewOp>(op);
+             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp>(op);
 }
 
-//
+scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
+                                        ValueRange newIterOperands) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(loop);
+
+  // Create a new loop before the existing one, with the extra operands.
+  auto operands = llvm::to_vector<4>(loop.getInitArgs());
+  operands.append(newIterOperands.begin(), newIterOperands.end());
+  scf::ForOp newLoop = rewriter.create<scf::ForOp>(
+      loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
+      operands);
+  newLoop.getBody()->erase();
+  newLoop.getRegion().getBlocks().splice(
+      newLoop.getRegion().getBlocks().begin(), loop.getRegion().getBlocks());
+  for (Value operand : newIterOperands)
+    newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
+
+  for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
+                                                  loop.getNumResults())))
+    std::get<0>(it).replaceAllUsesWith(std::get<1>(it));
+  return newLoop;
+}
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping) {
@@ -400,8 +542,23 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (currentValue.getDefiningOp<scf::ForOp>())
       return failure();
     slice.insert(currentValue);
+    if (layout.find(currentValue) != layout.end()) {
+      if (layout[currentValue] != encoding)
+        return failure();
+    }
     layout[currentValue] = encoding;
     if (auto *definingOp = currentValue.getDefiningOp()) {
+      // If the op has multiple results we need to update all results layout.
+      for (Value result : definingOp->getResults()) {
+        if (result == currentValue || !result.getType().isa<RankedTensorType>())
+          continue;
+        if (layout.find(result) != layout.end()) {
+          if (layout[result] != encoding)
+            return failure();
+          continue;
+        }
+        layout[result] = encoding;
+      }
       if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
@@ -421,10 +578,10 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     Block *block = blockArg.getOwner();
     Operation *parentOp = block->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-      OpOperand &initOperand = forOp.getOpOperandForRegionIterArg(blockArg);
+      OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand.get(), encoding});
+      queue.push_back({initOperand->get(), encoding});
       queue.push_back({yieldOperand, encoding});
       continue;
     }
@@ -536,7 +693,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       Value value = queue.pop_back_val();
       if (auto nestedFor = value.getDefiningOp<scf::ForOp>()) {
         auto result = value.cast<OpResult>();
-        OpOperand &forOperand = nestedFor.getOpOperandForResult(result);
+        OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
         markLive(forOperand.get());
         auto nestedYieldOp =
             cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());
@@ -582,6 +739,28 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         continue;
       if (yieldOperand.value() == block.getArgument(yieldOperand.index() + 1))
         continue;
+
+      // The yield operand might live outside the loop, e.g.
+      //   %init = ...
+      //   %x = ...
+      //   %y = for iter_args(%unused = %init) {
+      //     yield %x
+      //   }
+      //
+      // In this case, the loop returns %x if it runs 1 or more times, and
+      // otherwise it returns %init.  We cowardly refuse to remove this operand
+      // from the yield.  (We could, but we'd need to prove that the loop runs 0
+      // or >=1 times.)
+      //
+      // As a special case, if it doesn't matter whether the loop runs 0 or >=1
+      // times (because the loop returns the same value in both cases) then we
+      // can still mark the operand as dead. This occurs in the above example
+      // when %init is the same as %x.
+      if (!forOp->isAncestor(
+              yieldOperand.value().getParentRegion()->getParentOp()) &&
+          yieldOperand.value() != forOp.getInitArgs()[yieldOperand.index()])
+        continue;
+
       deadArg.push_back(yieldOperand.index());
     }
     if (deadArg.empty())

@@ -2,4 +2,15 @@
 93ab76a2a37fe99e152e8b9bca55162ef3b504b0 refs/remotes/origin/dev/ianb/notify-on-faiulre-test
 c1a20c9ac3366b2a7670ecaefba3d062fe9870b7 refs/remotes/origin/dev/nhat/fix-nightly-test
 25e296204c7232b46eb20ec4fd407836102e4fad refs/remotes/origin/dev/nhat/pep8
-98a6e1958ce768fc72fb268ca39eb84243224a5c refs/remotes/origin/main
+a2d16dfa89abf0b2f8ad5beb52eee4e1ba34fce3 refs/remotes/origin/haishanz/triton-arith-to-linalg
+e187c402ebaf3ee822da48f7b59f63f3740e83b6 refs/remotes/origin/main
+efe88d3346fc7309f30b3e6d3709f679caee2fe9 refs/remotes/origin/nathanielmcvicar/arm-workflow
+eb0f6571e9c7e89fe97320837dd9142e1a408854 refs/remotes/origin/nhat/fix_nightly
+9298cb80d4d00c798ab97ce0ada820d580f3e537 refs/remotes/origin/nhat/matmul
+3b8b5983bcef19f6fc45492cacd1972f61bbc551 refs/remotes/origin/nhat/matmul_demo
+e665eb5653ba05ba1a4078d798afa14717011223 refs/remotes/origin/nhat/modulo
+25f2c1bf9f11f5c503395a260d7dd434f98620f4 refs/remotes/origin/nhat/new_plugin
+c4c3afa85e4261f2fc5e50fb22aeee0fdd45c353 refs/remotes/origin/nhat/new_plugin_env
+25f2c1bf9f11f5c503395a260d7dd434f98620f4 refs/remotes/origin/nhat/new_plugin_triton_submodule
+0b9f2476c75a474bd0f2fe6e5b91f6fd238562c5 refs/remotes/origin/nhat/partial_conversion
+99ee98563407edeb9c455863f98a17e9a3c5539d refs/remotes/origin/nhat/test

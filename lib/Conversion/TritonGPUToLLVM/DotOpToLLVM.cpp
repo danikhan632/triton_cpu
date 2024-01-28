@@ -1,4 +1,4 @@
-#include "DotOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
 using namespace mlir;
@@ -7,7 +7,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
@@ -34,7 +34,7 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 TritonGPUToLLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread);
-
+namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
       triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
@@ -53,10 +53,10 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    MmaEncodingAttr mmaLayout = D.getType()
-                                    .cast<RankedTensorType>()
-                                    .getEncoding()
-                                    .dyn_cast<MmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                          .cast<RankedTensorType>()
+                                          .getEncoding()
+                                          .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
       if (mmaLayout.isVolta())
         return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
@@ -102,10 +102,10 @@ struct DotAsyncOpConversion
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    MmaEncodingAttr mmaLayout = D.getType()
-                                    .cast<RankedTensorType>()
-                                    .getEncoding()
-                                    .dyn_cast<MmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                          .cast<RankedTensorType>()
+                                          .getEncoding()
+                                          .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!isOuter && mmaLayout &&
         supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
       if (mmaLayout.isHopper()) {
@@ -131,18 +131,65 @@ struct DotWaitOpConversion
   matchAndRewrite(triton::nvidia_gpu::DotWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto pendings = op.getPendings();
-    rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(
-        op, adaptor.getInput(), pendings);
+    Location loc = op.getLoc();
+    if (adaptor.getInputs().size() <= 1) {
+      Value intput =
+          adaptor.getInputs().size() == 1 ? adaptor.getInputs()[0] : Value();
+      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(op, intput,
+                                                                   pendings);
+      return success();
+    }
+    std::vector<Type> types;
+    // Pack the inputs into a single struct.
+    for (Value input : adaptor.getInputs()) {
+      auto structType = input.getType().dyn_cast<LLVM::LLVMStructType>();
+      if (!structType)
+        return failure();
+      for (Type type : structType.getBody())
+        types.push_back(type);
+    }
+    auto packedType =
+        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
+    Value packed = rewriter.create<LLVM::UndefOp>(loc, packedType);
+    unsigned outputStructIndex = 0;
+    for (Value input : adaptor.getInputs()) {
+      auto structType = input.getType().dyn_cast<LLVM::LLVMStructType>();
+      for (unsigned i = 0; i < structType.getBody().size(); ++i) {
+        Value value = rewriter.create<LLVM::ExtractValueOp>(
+            loc, structType.getBody()[i], input, i);
+        packed = rewriter.create<LLVM::InsertValueOp>(
+            loc, packedType, packed, value, outputStructIndex++);
+      }
+    }
+    Value packedOutput =
+        rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, packed, pendings);
+    // Unpack the output into the original struct types.
+    SmallVector<Value> outputs;
+    outputStructIndex = 0;
+    for (Value input : adaptor.getInputs()) {
+      auto structType = input.getType().cast<LLVM::LLVMStructType>();
+      Value unpacked = rewriter.create<LLVM::UndefOp>(loc, structType);
+      for (unsigned i = 0; i < structType.getBody().size(); ++i) {
+        Value value = rewriter.create<LLVM::ExtractValueOp>(
+            loc, packedType.getBody()[outputStructIndex], packedOutput,
+            outputStructIndex);
+        outputStructIndex++;
+        unpacked = rewriter.create<LLVM::InsertValueOp>(loc, structType,
+                                                        unpacked, value, i);
+      }
+      outputs.push_back(unpacked);
+    }
+    rewriter.replaceOp(op, outputs);
     return success();
   }
 };
+} // namespace
 
-void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns, int numWarps,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 ModuleAllocation &allocation,
-                                 PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<DotAsyncOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<DotWaitOpConversion>(typeConverter, allocation, benefit);
+void mlir::triton::populateDotOpToLLVMPatterns(
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
+  patterns.add<DotOpConversion>(typeConverter, benefit);
+  patterns.add<DotAsyncOpConversion>(typeConverter, benefit);
+  patterns.add<DotWaitOpConversion>(typeConverter, benefit);
 }

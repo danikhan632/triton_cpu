@@ -20,11 +20,12 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "PatternTritonGPUOpToLLVM.h"
 
-#include "TensorPtrOpsToLLVM.h"
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace {
 struct MakeTensorPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeTensorPtrOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -74,8 +75,7 @@ struct AdvanceOpConversion
     auto tensorPtr = adaptor.getPtr();
 
     auto offsets = adaptor.getOffsets();
-    auto elems =
-        getTypeConverter()->unpackLLElements(loc, tensorPtr, rewriter, ptrType);
+    auto elems = getTypeConverter()->unpackLLElements(loc, tensorPtr, rewriter);
 
     SmallVector<Value, 2> newOffsets;
 
@@ -93,11 +93,12 @@ struct AdvanceOpConversion
     return success();
   }
 };
+} // namespace
 
-void populateTensorPtrOpsToLLVMPatterns(
+void mlir::triton::populateTensorPtrOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
+    PatternBenefit benefit) {
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, benefit);
   return;

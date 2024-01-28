@@ -1,28 +1,12 @@
-```bash
-TRITON_CODEGEN_TRITON_SHARED=1 python3.11 setup.py develop 
-https://hackgtstoragebucket.s3.amazonaws.com/llvm-b1115f8c-ubuntu-arm64.tar.gz
-export LLVM_BINARY_DIR=/home/green/.triton/llvm/llvm-b1115f8c-ubuntu-x64/bin
-export TRITON_SHARED_OPT_PATH=/home/green/code/triton/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt
-
-/home/utmarm/code/triton_cpu/python/build/cmake.linux-aarch64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt
-```
-
-
-
-
-
-
 <div align="center">
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
 
-[![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml)
-
 We're hiring! If you are interested in working on Triton at OpenAI, we have roles open for [Compiler Engineers](https://openai.com/careers/software-engineer-triton-compiler) and [Kernel Engineers](https://openai.com/careers/kernel-engineer).
 
-**`Documentation`** |
-------------------- |
-[![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
+| **`Documentation`** | **`Nightly Wheels`** |
+|-------------------- | -------------------- |
+| [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml) |
 
 
 # Triton
@@ -79,13 +63,12 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-1. Find the version of LLVM that Triton builds against.  Check `python/setup.py`
-   for a line like
-
-       version = "llvmorg-18-init-7000-g76ce4736721a"
+1. Find the version of LLVM that Triton builds against.  Check
+`cmake/llvm-hash.txt` to see the current version. For example, if it says:
+       49af6502c6dcb4a7f7520178bd14df396f78240c
 
    This means that the version of Triton you have builds against
-   [LLVM](https://github.com/llvm/llvm-project) 76ce4736721a.
+   [LLVM](https://github.com/llvm/llvm-project) 49af6502.
 
 2. `git checkout` LLVM at this revision.  Optionally, make additional
    modifications to LLVM.
@@ -121,6 +104,21 @@ arbitrary LLVM version.
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
+
+- vscode intellisense has some difficulty figuring out how to build Triton's C++
+  (probably because, in our build, users don't invoke cmake directly, but
+  instead use setup.py).  Teach vscode how to compile Triton as follows.
+
+    - Do a local build.
+    - Get the full path to the `compile_commands.json` file produced by the build:
+      `find python/build -name 'compile_commands.json | xargs readlink -f'`
+    - In vscode, install the
+      [C/C++
+      extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
+      then open the command palette (`Shift + Command + P` on Mac, or `Shift +
+      Ctrl + P` on Windows/Linux) and open `C/C++: Edit Configurations (UI)`.
+    - Open "Advanced Settings" and paste the full path to
+      `compile_commands.json` into the "Compile Commands" textbox.
 
 # Running tests
 
@@ -167,8 +165,3 @@ Supported Platforms:
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
   * Under development: AMD GPUs, CPUs
-
-
-
-export TRITON_SHARED_OPT_PATH=/home/green/code/triton/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt
-export LLVM_BINARY_DIR=/home/green/.triton/llvm/llvm-b1115f8c-ubuntu-x64/bin

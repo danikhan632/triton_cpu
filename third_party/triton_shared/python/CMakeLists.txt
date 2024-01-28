@@ -1,6 +1,7 @@
-
 # Python module
 if(TRITON_BUILD_PYTHON_MODULE)
+    message(STATUS "TRITON_BUILD_PYTHON_MODULE: ${TRITON_BUILD_PYTHON_MODULE}")
+    message(STATUS "CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
     message(STATUS "Adding Triton-Shared Reference CPU Backend")
     file(INSTALL
          ${CMAKE_CURRENT_SOURCE_DIR}/__init__.py

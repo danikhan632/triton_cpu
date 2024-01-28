@@ -6,12 +6,14 @@ add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)
 target_link_libraries(triton-opt PRIVATE
+  TritonLLVMIR
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
+  ${triton_libs}
   # tests
   TritonTestAnalysis
   # MLIR core
@@ -27,12 +29,14 @@ mlir_check_all_link_libraries(triton-reduce)
 
 llvm_update_compile_flags(triton-reduce)
 target_link_libraries(triton-reduce PRIVATE
+  TritonLLVMIR
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
+  ${triton_libs}
   # tests
   TritonTestAnalysis
   # MLIR core
@@ -43,41 +47,28 @@ target_link_libraries(triton-reduce PRIVATE
 
 mlir_check_all_link_libraries(triton-reduce)
 
+add_llvm_executable(triton-lsp triton-lsp.cpp PARTIAL_SOURCES_INTENDED)
+mlir_check_all_link_libraries(triton-lsp)
 
-add_llvm_executable(triton-translate triton-translate.cpp PARTIAL_SOURCES_INTENDED)
-llvm_update_compile_flags(triton-translate)
- target_link_libraries(triton-translate PRIVATE
-         TritonAnalysis
-         TritonTransforms
-         TritonGPUTransforms
-         TritonNvidiaGPUTransforms
-         TritonLLVMIR
-         TritonPTX
-         ${dialect_libs}
-         ${conversion_libs}
-         # tests
-         TritonTestAnalysis
+llvm_update_compile_flags(triton-lsp)
+target_link_libraries(triton-lsp PRIVATE
+  TritonAnalysis
+  TritonTransforms
+  TritonGPUTransforms
+  TritonNvidiaGPUTransforms
+  ${dialect_libs}
+  ${conversion_libs}
+  ${triton_libs}
+  # tests
+  TritonTestAnalysis
+  # MLIR core
+  MLIRLspServerLib
+  MLIRPass
+  MLIRTransforms
+)
 
-         LLVMCore
-         LLVMSupport
-         LLVMOption
-         LLVMCodeGen
-         LLVMAsmParser
+mlir_check_all_link_libraries(triton-lsp)
 
-         # MLIR core
-         MLIROptLib
-         MLIRIR
-         MLIRLLVMDialect
-         MLIRPass
-         MLIRSupport
-         MLIRTransforms
-         MLIRMathToLLVM
-         MLIRTransformUtils
-         MLIRLLVMToLLVMIRTranslation
-         MLIRNVVMToLLVMIRTranslation
-         MLIRROCDLToLLVMIRTranslation
-         )
-mlir_check_all_link_libraries(triton-translate)
 
 add_llvm_executable(triton-llvm-opt
   triton-llvm-opt.cpp
@@ -89,6 +80,7 @@ add_llvm_executable(triton-llvm-opt
 target_link_libraries(triton-llvm-opt PRIVATE
   TritonLLVMIR
 
+  LLVMAnalysis
   LLVMCore
   LLVMSupport
   LLVMOption

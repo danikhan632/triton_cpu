@@ -4,7 +4,7 @@
 // Licensed under the MIT license.
 //
 //===----------------------------------------------------------------------===//
-#include <iostream>
+
 #include "../RegisterTritonSharedDialects.h"
 
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"

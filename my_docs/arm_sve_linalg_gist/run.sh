@@ -1,1 +1,0 @@
-/home/green/.triton/llvm/llvm-49af6502-ubuntu-x64/bin/mlir-opt matmul.mlir --pass-pipeline="builtin.module(test-transform-dialect-interpreter{transform-file-name=transform_seq_matmul.mlir})" | mlir-opt --pass-pipeline="builtin.module(test-transform-dialect-interpreter{transform-file-name=transform_seq_contract.mlir})"

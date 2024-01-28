@@ -37,24 +37,10 @@ namespace {
 
 class IndexEmitter {
 public:
-  struct Cache {
-    llvm::DenseMap<IndexCacheKeyT, llvm::SmallVector<Value>,
-                   CacheKeyDenseMapInfo>
-        baseIndexCache;
-    llvm::DenseMap<IndexCacheKeyT, llvm::SmallVector<llvm::SmallVector<Value>>,
-                   CacheKeyDenseMapInfo>
-        indexCache;
-    OpBuilder::InsertPoint indexInsertPoint;
-  };
-
   IndexEmitter(MLIRContext *context_)
       : context(context_), option(context), typeConverter(context, option),
-        cacheInfo({&cache.baseIndexCache, &cache.indexCache,
-                   &cache.indexInsertPoint}),
-        base(typeConverter, cacheInfo), rewriter(context),
-        loc(UnknownLoc::get(context)) {
+        base(typeConverter), rewriter(context), loc(UnknownLoc::get(context)) {
     rewriter.setInsertionPointToStart(&block);
-    cache.indexInsertPoint = rewriter.saveInsertionPoint();
   }
 
   llvm::SmallVector<llvm::SmallVector<Value>>
@@ -69,7 +55,7 @@ public:
                           Type elemTy, llvm::ArrayRef<int64_t> shape,
                           bool withCTAOffset) {
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
-    SharedMemoryObject smemObj(getMockSmemBase(), shape,
+    SharedMemoryObject smemObj(getMockSmemBase(), elemTy, shape,
                                sharedLayout.getOrder(), loc, rewriter);
     return base.getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout,
                                       elemTy, smemObj, rewriter,
@@ -80,8 +66,7 @@ private:
   Value getMockSmemBase() {
     Value mockSmemBase =
         mlir::LLVM::getSRegValue(rewriter, loc, "%mock_smem_base");
-    auto llPtrTy = LLVM::LLVMPointerType::get(
-        typeConverter.convertType(rewriter.getI8Type()), 3);
+    auto llPtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     auto cast = rewriter.create<UnrealizedConversionCastOp>(
         loc, TypeRange{llPtrTy}, ValueRange{mockSmemBase});
     return cast.getResult(0);
@@ -91,8 +76,6 @@ private:
   MLIRContext *context;
   LowerToLLVMOptions option;
   TritonGPUToLLVMTypeConverter typeConverter;
-  Cache cache;
-  ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo cacheInfo;
   ConvertTritonGPUOpToLLVMPatternBase base;
   Block block;
   ConversionPatternRewriter rewriter;
@@ -114,7 +97,7 @@ int evalThreadIdOp(mlir::gpu::ThreadIdOp threadIdOp, int ctaid, int tid) {
   else if (dim == mlir::gpu::Dimension::z)
     return 0;
   else
-    assert(0 && "Invalid thread dim");
+    llvm::report_fatal_error("Invalid thread dim");
   return 0;
 }
 
@@ -127,7 +110,7 @@ int evalInlineAsmOp(mlir::LLVM::InlineAsmOp asmOp, int ctaid, int tid) {
   else if (asmStr.find("%cluster_ctaid.z") != std::string::npos)
     return 0;
   else if (asmStr.find("%cluster_nctaid.x") != std::string::npos)
-    assert(0 && "%cluster_nctaid.x not supported");
+    llvm::report_fatal_error("%cluster_nctaid.x not supported");
   else if (asmStr.find("%cluster_nctaid.y") != std::string::npos)
     return 1;
   else if (asmStr.find("%cluster_nctaid.z") != std::string::npos)
@@ -135,7 +118,7 @@ int evalInlineAsmOp(mlir::LLVM::InlineAsmOp asmOp, int ctaid, int tid) {
   else if (asmStr.find("%mock_smem_base") != std::string::npos)
     return 0;
   else
-    assert(0 && "Unrecognized ASM string");
+    llvm::report_fatal_error("Unrecognized ASM string");
   return 0;
 }
 
@@ -144,7 +127,7 @@ int evalGEPOp(mlir::LLVM::GEPOp gepOp, int ctaid, int tid) {
   int base = eval(gepOp.getBase(), ctaid, tid);
   int offset = eval(gepOp.getOperand(1), ctaid, tid);
   auto llPtrTy = gepOp.getRes().getType().cast<LLVM::LLVMPointerType>();
-  int bytesPerElem = llPtrTy.getElementType().getIntOrFloatBitWidth() / 8;
+  int bytesPerElem = llPtrTy.getIntOrFloatBitWidth() / 8;
   return base + offset * bytesPerElem;
 }
 
@@ -177,7 +160,7 @@ int eval(Value value, int ctaid, int tid) {
   } else if (auto gepOp = llvm::dyn_cast<mlir::LLVM::GEPOp>(op)) {
     return evalGEPOp(gepOp, ctaid, tid);
   } else {
-    assert(0 && "Unrecognized op type in the index expression");
+    llvm::report_fatal_error("Unrecognized op type in the index expression");
     return 0;
   }
 }

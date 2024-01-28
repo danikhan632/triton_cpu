@@ -4,18 +4,11 @@ import sysconfig
 import subprocess
 import tempfile
 from pathlib import Path
-from mlir.ir import Context, Module
-from triton.common.backend import BaseBackend, register_backend
+
+from triton.common.backend import BaseBackend, compute_core_version_key, register_backend
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
-from triton.runtime.jit import version_key
-def printc(obj, color="cyan"):
-    color_code = {
-        "black": "30", "red": "31", "green": "32", "yellow": "33",
-        "blue": "34", "magenta": "35", "cyan": "36", "white": "37"
-    }
-    colored_text = f"\033[{color_code[color]}m{obj}\033[0m" if color in color_code else obj
-    print(colored_text)
+
 
 def _get_triton_shared_opt_path() -> str:
     path = os.getenv("TRITON_SHARED_OPT_PATH", "")
@@ -40,15 +33,11 @@ def _ttir_to_ttsharedir(mod):
         Path(src_path).write_text(ttir_code)
         triton_shared_opt_path = _get_triton_shared_opt_path()
         subprocess.check_call([triton_shared_opt_path, src_path, "--triton-to-linalg", "-o", dst_path])
-        if os.environ.get('premade'):
-            dst_path="/home/green/code/triton_cpu/third_party/triton_shared/premade/dot.mlir"
-
         return Path(dst_path).read_text()
 
 
 def _optimize_ttsharedir(ttsharedir: str):
     # We don't apply any optimizations now, but we can add passes if needed.
-    # printc(ttsharedir)
     return ttsharedir
 
 
@@ -59,11 +48,9 @@ def _ttsharedir_to_llir(ttsharedir: str):
         llir_path = os.path.join(tmpdir, "ll.ir")
         Path(ttshared_path).write_text(ttsharedir)
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
-        print(llmlir_path)
         # TritonShared-MLIR to LLVM-MLIR
         subprocess.check_call([mlir_opt_path, ttshared_path,
             "--convert-linalg-to-affine-loops",
-            "--convert-bufferization-to-memref",
             "--eliminate-empty-tensors",
             "--empty-tensor-to-alloc-tensor",
             "--one-shot-bufferize=allow-return-allocs-from-loops=true",
@@ -74,14 +61,19 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
-             "--convert-vector-to-llvm=enable-arm-sve",  # Adjusted this line
+            "--convert-vector-to-llvm",
             "--convert-index-to-llvm",
             "--memref-expand",
             "--expand-strided-metadata",
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
+            # Lowering memrefs creates more affine.apply ops.
+            # Lowering these affine ops again creates further arith ops,
+            # so we have to run these two passes again here.
+            "--lower-affine",
+            "--convert-arith-to-llvm",
+            # Remove all unrealized casts created
             "--reconcile-unrealized-casts",
-            
             "-o",
             llmlir_path])
 
@@ -96,12 +88,11 @@ def _ttsharedir_to_llir(ttsharedir: str):
 
 def _optimize_llir(llir: str):
     # We don't apply any optimizations now, but we can add passes if needed.
-    printc(llir,"green")
+    print(llir)
     return llir
 
 
 def _llir_to_bin(llir: str):
-    
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "kernel.ll")
         dst_path = os.path.join(tmpdir, "kernel.o")
@@ -109,7 +100,9 @@ def _llir_to_bin(llir: str):
         llc_path = _get_llvm_bin_path("llc")
         subprocess.check_call([llc_path, src_path, "-o", dst_path])
         # Actually it's text-format assembly.  Use read_text().
-        return Path(dst_path).read_text()
+        txt=Path(dst_path).read_text()
+        print(txt)
+        return txt
 
 
 def _ty_to_cpp(ty):
@@ -123,8 +116,8 @@ def _ty_to_cpp(ty):
         "i64": "int64_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "float",
-        "bf16": "bf16",
+        "fp16": "float16",
+        "bf16": "float",
         "fp32": "float",
         "f32": "float",
         "fp64": "double",
@@ -139,7 +132,7 @@ def _extracted_ty(ty):
         'i64': 'int64_t',
         'u32': 'uint32_t',
         'u64': 'uint64_t',
-        'fp16': 'float',
+        'fp16': 'fp16',
         'bf16': 'float',
         'fp32': 'float',
         'f32': 'float',
@@ -289,6 +282,7 @@ class TritonSharedRefCPUBackend(BaseBackend):
 
     def __init__(self, device_type: str) -> None:
         super(TritonSharedRefCPUBackend, self).__init__(device_type)
+        self.version_key = None
 
     def add_stages(self, arch, extern_libs, stages):
         filter_in_stages = ["ast", "ttir"]
@@ -315,6 +309,11 @@ class TritonSharedRefCPUBackend(BaseBackend):
 
     def get_driver(self):
         return None
+
+    def get_version_key(self):
+        if self.version_key is None:
+            self.version_key = compute_core_version_key()
+        return self.version_key
 
     def get_stream(self, idx=None) -> int:
         # Returns int to make Triton happy.
@@ -347,11 +346,11 @@ class TritonSharedRefCPUBackend(BaseBackend):
     def get_architecture_descriptor(self, **kwargs):
         # CPU does not have the following parameters, but we need to pass some values to
         # make the Triton runtime happy.
-        return {"num_warps":8, "num_stages": 1}
+        return {"num_warps": 1, "num_stages": 1}
 
     def make_launcher_stub(self, name, signature, constants, ids):
         # name of files that are cached
-        so_cache_key = make_so_cache_key(version_key(), signature, constants, ids)
+        so_cache_key = make_so_cache_key(self.get_version_key(), signature, constants, ids)
         so_cache_manager = get_cache_manager(so_cache_key)
         so_name = f"{name}.py"
         # retrieve stub from cache if it exists
@@ -375,7 +374,6 @@ class TritonSharedRefCPUBackend(BaseBackend):
                 scheme = 'posix_prefix'
             py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
-            dst_path = os.path.join(tmpdir, so_name)
             py_src = f"""
 import os, subprocess, tempfile
 import importlib.util

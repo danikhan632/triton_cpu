@@ -21,13 +21,38 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "BarrierOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace {
+struct BarrierOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<mlir::gpu::BarrierOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      mlir::gpu::BarrierOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    if (op->hasAttr("bar_id")) {
+      // llvm.nvvm.barrier0 doesn't support bar_id and num_threads attributes,
+      // so we have to lower it to ptx manually.
+      auto barId = op->getAttrOfType<IntegerAttr>("bar_id").getInt();
+      auto numThreads = op->getAttrOfType<IntegerAttr>("num_threads").getInt();
+      barSync(rewriter, op, barId, numThreads);
+      rewriter.eraseOp(op);
+      return success();
+    }
+    // Otherwise we let the default lowering handle it
+    return failure();
+  }
+};
+
 // --------------------------------------------------------------------------
-// -- MBarrier related Ops lowering, to be moved to a seperate file ---------
+// -- MBarrier related Ops lowering, to be moved to a separate file ---------
 // --------------------------------------------------------------------------
 struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                                        triton::nvidia_gpu::AllocMBarrierOp> {
@@ -38,16 +63,20 @@ struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
   matchAndRewrite(triton::nvidia_gpu::AllocMBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
-    Type elemPtrTy;
+    Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    Type llvmElemTy;
     if (resultTensorTy) {
-      auto llvmElemTy =
+      llvmElemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
-      elemPtrTy = ptr_ty(llvmElemTy, 3);
     } else {
-      elemPtrTy = getTypeConverter()->convertType(resultTy);
+      auto resultPtrTy = resultTy.dyn_cast<triton::PointerType>();
+      assert(resultPtrTy && "Unknown type for AllocMBarrierOp");
+      llvmElemTy =
+          getTypeConverter()->convertType(resultPtrTy.getPointeeType());
     }
     smemBase = bitcast(smemBase, elemPtrTy);
     auto threadId = getThreadId(rewriter, loc);
@@ -61,14 +90,16 @@ struct AllocMBarrierOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     for (int i = 0; i < numMBarriers; ++i) {
       Value smem = smemBase;
       if (i > 0) {
-        smem = gep(elemPtrTy, smem, i32_val(i));
+        smem = gep(elemPtrTy, llvmElemTy, smem, i32_val(i));
       }
       rewriter.create<triton::nvgpu::MBarrierInitOp>(loc, smem, pred,
                                                      op.getCount());
     }
     if (resultTensorTy) {
-      auto smemObj = SharedMemoryObject(smemBase, resultTensorTy.getShape(),
-                                        {0}, loc, rewriter);
+      auto llvmElemTy =
+          getTypeConverter()->convertType(resultTensorTy.getElementType());
+      auto smemObj = SharedMemoryObject(
+          smemBase, llvmElemTy, resultTensorTy.getShape(), {0}, loc, rewriter);
       auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
       rewriter.replaceOp(op, retVal);
     } else {
@@ -140,11 +171,11 @@ struct ExtractMBarrierOpConversion
         op.getTensor().getType().cast<RankedTensorType>().getElementType();
     auto tensorStruct = adaptor.getTensor();
     auto index = adaptor.getIndex();
-    auto ptrTy =
-        LLVM::LLVMPointerType::get(getTypeConverter()->convertType(elemTy), 3);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     auto basePtr =
         extract_val(ptrTy, tensorStruct, rewriter.getDenseI64ArrayAttr(0));
-    Value result = gep(ptrTy, basePtr, index);
+    Value result =
+        gep(ptrTy, getTypeConverter()->convertType(elemTy), basePtr, index);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -199,19 +230,18 @@ struct FenceAsyncSharedOpConversion
     return success();
   }
 };
+} // namespace
 
-void populateBarrierOpToLLVMPatterns(
+void mlir::triton::populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
-  patterns.add<AllocMBarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierArriveOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierWaitOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<ExtractMBarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, allocation,
-                                               benefit);
-  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, allocation,
-                                             benefit);
-  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, allocation,
-                                             benefit);
+    PatternBenefit benefit) {
+  patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  patterns.add<AllocMBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<MBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<MBarrierWaitOpConversion>(typeConverter, benefit);
+  patterns.add<ExtractMBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, benefit);
+  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
 }

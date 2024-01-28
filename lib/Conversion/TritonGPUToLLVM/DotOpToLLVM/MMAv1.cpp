@@ -1,11 +1,11 @@
-#include "../DotOpToLLVM.h"
+#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
@@ -21,8 +21,8 @@ extractLoadedOperand(Value llStruct, int NK,
                      ConversionPatternRewriter &rewriter,
                      TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
   ValueTable rcds;
-  SmallVector<Value> elems = typeConverter->unpackLLElements(
-      llStruct.getLoc(), llStruct, rewriter, type);
+  SmallVector<Value> elems =
+      typeConverter->unpackLLElements(llStruct.getLoc(), llStruct, rewriter);
 
   int offset = 0;
   for (int i = 0; offset < elems.size(); ++i) {
@@ -47,7 +47,7 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto mmaLayout = D.getType()
                        .cast<RankedTensorType>()
                        .getEncoding()
-                       .cast<MmaEncodingAttr>();
+                       .cast<NvidiaMmaEncodingAttr>();
   auto ALayout = A.getType()
                      .cast<RankedTensorType>()
                      .getEncoding()
@@ -63,15 +63,15 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto AShape = ATensorTy.getShape();
   auto BShape = BTensorTy.getShape();
 
-  bool isARow = ALayout.getMMAv1IsRow();
-  bool isBRow = BLayout.getMMAv1IsRow();
+  bool isARow = mmaLayout.getMMAv1IsRow(ALayout.getOpIdx());
+  bool isBRow = mmaLayout.getMMAv1IsRow(BLayout.getOpIdx());
   auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
       mmaLayout.decodeVoltaLayoutStates();
   assert(isARow == isARow_);
   assert(isBRow == isBRow_);
 
-  unsigned numM = ALayout.getMMAv1NumOuter(AShape);
-  unsigned numN = BLayout.getMMAv1NumOuter(BShape);
+  unsigned numM = mmaLayout.getMMAv1NumOuter(AShape, ALayout.getOpIdx());
+  unsigned numN = mmaLayout.getMMAv1NumOuter(BShape, BLayout.getOpIdx());
   unsigned NK = AShape[1];
 
   auto has = extractLoadedOperand(adaptor.getA(), NK, rewriter, typeConverter,
@@ -84,7 +84,7 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   // DotOp, we can call the order of the values the accumulator-internal
   // order.
   SmallVector<Value> acc =
-      typeConverter->unpackLLElements(loc, adaptor.getC(), rewriter, DTensorTy);
+      typeConverter->unpackLLElements(loc, adaptor.getC(), rewriter);
   size_t resSize = acc.size();
 
   // The resVals holds the final result of the DotOp.

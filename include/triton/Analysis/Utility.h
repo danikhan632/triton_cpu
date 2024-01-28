@@ -75,8 +75,19 @@ private:
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
-    auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-    srcEncoding = type.getEncoding();
+    auto firstTy = op.getOperands()[0].getType().cast<RankedTensorType>();
+    srcShape = firstTy.getShape();
+    srcEncoding = firstTy.getEncoding();
+    srcElementTypes = op.getElementTypes();
+
+    for (const auto &t : op.getInputTypes()) {
+      if (t.getShape() != srcShape) {
+        op.emitError() << "shape mismatch";
+      }
+      if (t.getEncoding() != srcEncoding) {
+        op.emitError() << "encoding mismatch";
+      }
+    }
   }
   // Return true if the lowering of the scan op is supported.
   bool isSupported();
@@ -102,6 +113,9 @@ public:
   unsigned getNonAxisNumBlocks();
   // Return the size of the scratch space needed for scan lowering.
   unsigned getScratchSizeInBytes();
+  // Return the number of elements of the scratch space needed for scan
+  // lowering.
+  unsigned getScratchSizeInElems();
 
   // Stride between contiguous element along axis dim.
   unsigned getAxisElementStride();
@@ -113,23 +127,32 @@ public:
   Location getLoc() { return scanOp.getLoc(); }
   unsigned getAxis() { return scanOp.getAxis(); }
   triton::gpu::BlockedEncodingAttr getEncoding();
-  llvm::ArrayRef<int64_t> getShape();
+  llvm::ArrayRef<int64_t> getShape() { return srcShape; }
+  unsigned getNumOperands() { return scanOp.getNumOperands(); }
+  SmallVector<Type> getElementTypes() { return srcElementTypes; }
+  Attribute getSrcLayout() { return srcEncoding; }
   Region &getCombineOp();
 
 private:
   triton::ScanOp scanOp;
   Attribute srcEncoding;
+  llvm::ArrayRef<int64_t> srcShape;
+  SmallVector<Type> srcElementTypes;
 };
 
 bool maybeSharedAllocationOp(Operation *op);
 
 bool maybeAliasOp(Operation *op);
 
+bool supportMFMA(triton::DotOp op);
+
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
 bool isSingleValue(Value value);
+
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
@@ -349,6 +372,53 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v);
 
+namespace triton {
+
+template <typename T>
+SmallVector<T> applyPermutation(ArrayRef<T> vec,
+                                ArrayRef<int32_t> permutation) {
+  assert(vec.size() == permutation.size());
+
+  // Check that `permutation` is actually a permutation.
+#ifndef NDEBUG
+  SmallVector<int32_t> sortedPerm(permutation);
+  llvm::sort(sortedPerm);
+  for (int i = 0; i < sortedPerm.size(); ++i) {
+    assert(sortedPerm[i] == i);
+  }
+#endif
+
+  SmallVector<T> result;
+  result.reserve(vec.size());
+  for (auto i : permutation) {
+    result.push_back(vec[i]);
+  }
+  return result;
+}
+
+// These overloads are necessary to get applyPermutation() to work without an
+// explicit cast of the operands to ArrayRef.
+inline SmallVector<int32_t> applyPermutation(ArrayRef<int32_t> vec,
+                                             ArrayRef<int32_t> permutation) {
+  return applyPermutation<int32_t>(vec, permutation);
+}
+inline SmallVector<unsigned> applyPermutation(ArrayRef<unsigned> vec,
+                                              ArrayRef<int32_t> permutation) {
+  return applyPermutation<unsigned>(vec, permutation);
+}
+inline SmallVector<int64_t> applyPermutation(ArrayRef<int64_t> vec,
+                                             ArrayRef<int32_t> permutation) {
+  return applyPermutation<int64_t>(vec, permutation);
+}
+inline SmallVector<Value> applyPermutation(ArrayRef<Value> vec,
+                                           ArrayRef<int32_t> permutation) {
+  return applyPermutation<Value>(vec, permutation);
+}
+
+[[nodiscard]] SmallVector<int32_t>
+inversePermutation(ArrayRef<int32_t> permutation);
+
+} // namespace triton
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

@@ -9,7 +9,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This pass works after all other passes, inserting fences to ensure that
-// memory operations are properly ordered acorss genric and async proxy.
+// memory operations are properly ordered across generic and async proxy.
 //
 //===----------------------------------------------------------------------===//
 
@@ -52,7 +52,7 @@ public:
                                .getType()
                                .cast<RankedTensorType>()
                                .getEncoding()
-                               .dyn_cast<ttg::MmaEncodingAttr>();
+                               .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
         auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
         if (isHopperEncoding &&
             (dependOnSharedEncOperand(a) || dependOnSharedEncOperand(b))) {
@@ -71,7 +71,7 @@ private:
     if (op && isa<tt::DotOp, ttng::DotAsyncOp>(op))
       return false;
     // reach convertlayout
-    if (op && isa<ttg::ConvertLayoutOp>(op) && ttg::isSharedEncoding(operand))
+    if (op && isa<ttg::ConvertLayoutOp>(op) && ttg::hasSharedEncoding(operand))
       return true;
     // root and not BlockArgument
     if (!op && !isa<BlockArgument>(operand))
@@ -88,7 +88,7 @@ private:
     if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
       unsigned argNum = arg.getArgNumber();
       Operation *argOwner = arg.getOwner()->getParentOp();
-      // suport ForOp only
+      // support ForOp only
       if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
         // prologue
         auto iterOperands = forOp.getInitArgs();

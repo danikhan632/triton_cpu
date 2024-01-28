@@ -7,19 +7,25 @@ python/triton.egg-info/
 python/triton/_C/libtriton.pyd
 python/triton/_C/libtriton.so
 
+# Backends copied from submodules
+python/triton/backends/
+!python/triton/backends/__init__.py
+!python/triton/backends/compiler.py
+!python/triton/backends/driver.py
+extras
 # Python caches
 __pycache__/
 *.py[cod]
 .pytest_cache
-arm_llvm/sccache/
+
 # Environments
 .venv
 venv/
 venv.bak/
 
-# # VS Code project files
-# .vscode
-# .vs
+# VS Code project files
+.vscode
+.vs
 
 # JetBrains project files
 .idea
@@ -42,4 +48,8 @@ docs/getting-started/tutorials
 .clangd/
 .cache
 /compile_commands.json
+.vscode
+.vs
 
+# Vim
+*.swp

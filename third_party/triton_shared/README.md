@@ -8,7 +8,10 @@ The basic intended architecture looks like this:
 
 [Triton IR] -> [Middle Layer] -> [HW specific IR]
 
-The middle-layer uses MLIR's Linalg and Tenor Dialects for operations on Triton block values. Operations on Triton pointers use the Memref Dialect.
+The middle-layer uses MLIR's Linalg and Tensor Dialects for operations on Triton block values. Operations on Triton pointers use the Memref Dialect.
+
+## Motivation
+[This talk at the 2023 Triton Developer Conferene](https://www.youtube.com/watch?v=y2V3ucS1pfQ) gives some backgorund on the project and its goals.
 
 ## Usage
 This repo doesn't build by itself and must instead by built from within a [Triton repo](https://github.com/openai/triton) where it is included as a submodule.
@@ -102,7 +105,7 @@ Important details to note:
 %reinterpret_cast = memref.reinterpret_cast %arg2 to offset: [...] memref<*xf32> to memref<1024xf32>
 %extracted_slice = tensor.extract_slice %15[0] [%21] [1] : tensor<1024xf32> to tensor<?xf32>
 %subview = memref.subview %reinterpret_cast[0] [%21] [1] : memref<1024xf32> to memref<?xf32>
-memref.tensor_store %extracted_slice, %subview : memref<?xf32>
+bufferization.materialize_in_destination %extracted_slice in writable %subview
 ```
 
 + element-wise `arith` and `math` operators are converted to their corresponding `linalg.generic` version.

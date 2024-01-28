@@ -195,7 +195,10 @@ Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
 
 /// Create a 64-bit float constant.
-Value createConstantF64(Location loc, OpBuilder &rewriter, float v);
+Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
+
+/// Create NaN constant of specified type.
+Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
 
 /// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
@@ -209,9 +212,10 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 /// (1) load_dsmem(addr, ctaId)
 /// (2) load_dsmem(addr, ctaId, vec)
 Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId);
+                      Value ctaId, Type elemTy);
 SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
-                                   Value addr, Value ctaId, unsigned vec);
+                                   Value addr, Value ctaId, unsigned vec,
+                                   Type elemTy);
 
 /// Usage of macro store_dsmem
 /// (1) store_dsmem(addr, ctaId, value, pred)
@@ -234,6 +238,7 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
 struct SharedMemoryObject {
   Value base; // i32 ptr. The start address of the shared memory object after
               // the initial allocation or the last slicing operation.
+  Type baseElemType;
   // We need to store strides as Values, not integers, because the
   // extract_slice instruction can take a slice at arbitrary offsets.
   // Take $a[16:32, 16:32] as an example; though we know the stride of $a[0] is
@@ -251,15 +256,16 @@ struct SharedMemoryObject {
   // We can use offsets to recover the previous base.
   // The offsets are zero at the initial allocation.
 
-  SharedMemoryObject(Value base, ArrayRef<Value> strides,
+  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> strides,
                      ArrayRef<Value> offsets)
-      : base(base), strides(strides.begin(), strides.end()),
+      : base(base), baseElemType(baseElemType),
+        strides(strides.begin(), strides.end()),
         offsets(offsets.begin(), offsets.end()) {}
 
-  SharedMemoryObject(Value base, ArrayRef<int64_t> shape,
+  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      ArrayRef<unsigned> order, Location loc,
                      ConversionPatternRewriter &rewriter)
-      : base(base) {
+      : base(base), baseElemType(baseElemType) {
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     offsets.append(order.size(), i32_val(0));
   }
@@ -290,12 +296,12 @@ struct SharedMemoryObject {
     Value cSwizzleOffset = getCSwizzleOffset(order);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
-    return gep(type, base, offset);
+    return gep(type, baseElemType, base, offset);
   }
 };
 
 SharedMemoryObject
-getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
+getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
                                 ConversionPatternRewriter &rewriter);
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
@@ -324,7 +330,7 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred);
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Value pred);
+                 Type elemTy, Value pred);
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
@@ -337,6 +343,41 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
+
+static bool isKernel(FunctionOpInterface funcOp) {
+  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
+}
+
+static Value getStackPointer(PatternRewriter &rewriter,
+                             FunctionOpInterface funcOp) {
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  LLVM::GlobalOp globalBase = nullptr;
+  mod.walk([&](LLVM::GlobalOp op) {
+    if (op.getSymName() == "global_smem")
+      globalBase = op;
+  });
+  assert(globalBase);
+  if (isKernel(funcOp))
+    return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+  else
+    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+}
+
+static Value getSharedMemoryBase(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+  FunctionOpInterface func =
+      op->template getParentOfType<FunctionOpInterface>();
+  assert(op->hasAttr("allocation.offset"));
+  size_t offset = op->getAttr("allocation.offset")
+                      .cast<IntegerAttr>()
+                      .getValue()
+                      .getZExtValue();
+  Value offVal = i32_val(offset);
+  Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
+  return base;
+}
 
 } // namespace LLVM
 } // namespace mlir

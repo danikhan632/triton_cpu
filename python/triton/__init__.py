@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '2.1.0'
+__version__ = '3.0.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -21,6 +21,7 @@ from .compiler import compile, CompilationError
 
 from . import language
 from . import testing
+from . import tools
 
 __all__ = [
     "autotune",
@@ -45,11 +46,11 @@ __all__ = [
     "tools",
 ]
 
-
 # -------------------------------------
 # misc. utilities that  don't fit well
 # into any specific module
 # -------------------------------------
+
 
 def cdiv(x: int, y: int):
     return (x + y - 1) // y
