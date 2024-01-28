@@ -12,7 +12,7 @@ python/triton/backends/
 !python/triton/backends/__init__.py
 !python/triton/backends/compiler.py
 !python/triton/backends/driver.py
-extras
+
 # Python caches
 __pycache__/
 *.py[cod]
