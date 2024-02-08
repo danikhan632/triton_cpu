@@ -12,28 +12,27 @@
 // RUN:   -march=aarch64 -mattr="+sve,+sme" \
 // RUN:   -shared-libs=%mlir_runner_utils,%mlir_c_runner_utils,%arm_sme_abi_shlib | \
 // RUN: FileCheck %s
-
+#map = affine_map<(d0, d1) -> (d0, d1)>
+module {
 func.func @matmul(%A : tensor<?x?xf32>, %B : tensor<?x?xf32>, %C : tensor<?x?xf32>) {
   %res = linalg.matmul ins(%A, %B: tensor<?x?xf32>, tensor<?x?xf32>)
                        outs(%C: tensor<?x?xf32>) -> tensor<?x?xf32>
   %xf = tensor.cast %res : tensor<?x?xf32> to tensor<*xf32>
   return
 }
-
+}
 
 module attributes {transform.with_named_sequence} {
   transform.named_sequence @__transform_main(%module : !transform.any_op {transform.consumed}) {
-    %matmul = transform.structured.match ops{["linalg.matmul"]} in %module
-      : (!transform.any_op) -> !transform.any_op
+    %matmul = transform.structured.match ops{["linalg.matmul"]} in %module : (!transform.any_op) -> !transform.any_op
 
     // Step 1: Tile for size [4] x [4], which corresponds to SVLs x SVLs, where
     // SVLs is the number of 32-bit elements in a vector of SVL bits.
-    %tiled_linalg_op, %loops:3 = transform.structured.tile_using_for %matmul[[4], [4], 1]
-      : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op, !transform.any_op)
+    %tiled_linalg_op, %loops:3 = transform.structured.tile_using_for %matmul[[4], [4], 1]: (!transform.any_op) ->
+          (!transform.any_op, !transform.any_op, !transform.any_op, !transform.any_op)
 
     // Step 2: Vectorize.
-    transform.structured.vectorize %tiled_linalg_op vector_sizes [[4], [4], 1]
-      : !transform.any_op
+    transform.structured.vectorize %tiled_linalg_op vector_sizes [[4], [4], 1] : !transform.any_op
 
     // Step 3: Bufferize ahead of TransferReadDropUnitDimsPattern, which
     // currently only supports memrefs.
@@ -63,3 +62,17 @@ module attributes {transform.with_named_sequence} {
   }
 }
 
+
+
+
+- `tt.broadcast` : `transform.apply_patterns.vector.lower_broadcast`
+- `tt.trans` : `transform.apply_patterns.vector.lower_transpose`
+- `tt.reshape` : `transform.apply_patterns.vector.lower_shape_cast`
+- `tt.splat` : `transform.apply_patterns.vector.lower_broadcast`
+- `tt.scan` : `transform.apply_patterns.vector.lower_scan`
+- `tt.reduce` : 
+  - `transform.apply_patterns.vector.lower_multi_reduction`
+  - `transform.apply_patterns.vector.reduction_to_contract`
+- `tt.extern_elementwise` :
+  - `transform.apply_patterns.vector.fold_arith_extension`
+  - `transform.apply_patterns.vector.lower_contraction`

@@ -30,13 +30,13 @@ def process_mlir_file(file_path, triton_shared_opt_path):
 
 if __name__ == "__main__":
     os.system("clear")
-    # if len(sys.argv) < 2:
-    #     print("Usage: python script.py <path_to_mlir_file>")
-    #     sys.exit(1)
-
-    # file_path = sys.argv[1]
+    if len(sys.argv) < 2:
+        print("Usage: python script.py <path_to_mlir_file>")
+        sys.exit(1)
+    os.system("clear")
+    file_path = sys.argv[1]
     triton_shared_opt_path = "/home/green/code/triton_cpu_new/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt"
-    fil="/home/green/code/triton_cpu_new/third_party/triton_shared/test/Conversion/TritonToStructured/kernel-03-matrix-multiplication.mlir"
+
     
-    os.system(triton_shared_opt_path + " --triton-to-linalg " + fil  )
+    os.system(triton_shared_opt_path + " --triton-to-linalg " + file_path)
 

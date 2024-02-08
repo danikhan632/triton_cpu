@@ -43,7 +43,8 @@ docs/dialects/
 docs/getting-started/tutorials
 !python/tutorials/*.py
 !python/tutorials/*.rst
-
+extras/arm_sme_qemu
+extras/arm_sme_qemu.zip
 # clangd index. (".clangd" is a config file now, thus trailing slash)
 .clangd/
 .cache

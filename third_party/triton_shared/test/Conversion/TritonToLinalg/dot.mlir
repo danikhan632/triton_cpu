@@ -1,4 +1,4 @@
-// RUN: triton-shared-opt --triton-to-linalg %s | FileCheck %s
+t// RUN: triton-shared-opt --triton-to-linalg %s | FileCheck %s
 module {
   tt.func @kernel(
     %arg0 : !tt.ptr<bf16>,
