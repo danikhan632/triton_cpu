@@ -37,8 +37,8 @@ public:
   void getDependentDialects(DialectRegistry &registry) const override {
     registry
         .insert<arith::ArithDialect, math::MathDialect, affine::AffineDialect,
-                scf::SCFDialect, tensor::TensorDialect, triton::TritonDialect,
-                tts::TritonStructuredDialect>();
+                scf::SCFDialect, tensor::TensorDialect, func::FuncDialect
+                >();
   }
 
   void runOnOperation() override {

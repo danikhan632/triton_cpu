@@ -127,18 +127,20 @@ def matmul(a, b, activation=""):
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-    matmul_kernel[grid](
-        a, b, c,  #
-        M, N, K,  #
-        a.stride(0), a.stride(1),  #
-        b.stride(0), b.stride(1),  #
-        c.stride(0), c.stride(1),  #
-        ACTIVATION=activation,  #
-        BLOCK_SIZE_M=32,
-        BLOCK_SIZE_N=64,
-        BLOCK_SIZE_K=16,
-        GROUP_SIZE_M=8
-    )
+
+    compiled_kernel = triton.compile(matmul_kernel, 
+
+                                     defines={
+                                         'BLOCK_SIZE_M': 32,
+                                         'BLOCK_SIZE_N': 64,
+                                         'BLOCK_SIZE_K': 16,
+                                         'GROUP_SIZE_M': 8,
+                                         'ACTIVATION': 'leaky_relu' if activation == "leaky_relu" else 'none',  # Assuming 'none' is handled in your kernel
+                                     })
+    # Launch the kernel
+    compiled_kernel(a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
+                    grid=(4,),  # Specifies how many instances of the kernel to launch
+                    block=(32* 64))  # Example block size, adjust based on your kernel's requirements
     return c
 
 
