@@ -1,7 +1,10 @@
 import torch
 
 import triton
+from triton.backends.triton_shared.driver import CPUDriver
 import triton.language as tl
+
+triton.runtime.driver.set_active(CPUDriver())
 
 
 @triton.jit
@@ -57,9 +60,11 @@ def test():
     size = 98432
     x = torch.rand(size, device="cpu")
     y = torch.rand(size, device="cpu")
-    # output_torch = x + y
+    output_torch = x + y
     output_triton = add(x, y)
-    # print("expected", output_torch)
+    print("expected", output_torch)
     print("actual", output_triton)
-
-test()
+    print(
+        f"The maximum difference between torch and triton is "
+        f"{torch.max(torch.abs(output_torch - output_triton))}"
+    )

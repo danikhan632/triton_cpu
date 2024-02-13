@@ -20,7 +20,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Passes.h"
-#include "mlir/Dialect/Transform/IR/TransformDialect.h"
+
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -29,9 +29,6 @@
 
 #include <numeric>
 #include <type_traits>
-
-// TODO: this should be triton-arith-to-linalg after retiring monolithic pass
-#define DEBUG_TYPE "triton-to-linalg"
 
 using namespace mlir;
 using namespace triton;
@@ -244,7 +241,6 @@ struct LegacyAddPtrConverter : public OpConversionPattern<triton::AddPtrOp> {
     return success();
   }
 };
-
 
 struct LoadConverter : public OpConversionPattern<triton::LoadOp> {
 private:
@@ -559,7 +555,6 @@ struct YieldConverter : public OpConversionPattern<scf::YieldOp> {
   }
 };
 
-
 // Remove all Meta ops except for AddPtr which is handled by AddPtrConverter.
 // Use benefit == 10 to ensure that this pattern always takes precedence over
 // other patterns.
@@ -601,11 +596,9 @@ struct UnrealizedCastConverter
   }
 };
 
-
 //-----------------------------
 // End of monolithic only
 //-----------------------------
-
 
 struct SplatConverter : public OpConversionPattern<triton::SplatOp> {
   using OpConversionPattern<triton::SplatOp>::OpConversionPattern;
@@ -1741,8 +1734,7 @@ public:
   matchAndRewrite(triton::ExternElementwiseOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    if (op.getLibname().compare("libdevice") || !op.getPure() ||
-        op.getArgs().size() != 2)
+    if (!op.getPure() || op.getArgs().size() != 2)
       return failure();
 #define POPULATE_BINARY_OP(FUNC_NAME, DST_OP)                                  \
   if (!op.getSymbol().compare(FUNC_NAME)) {                                    \
@@ -1769,8 +1761,7 @@ public:
   matchAndRewrite(triton::ExternElementwiseOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    if (op.getLibname().compare("libdevice") || !op.getPure() ||
-        op.getArgs().size() != 1)
+    if (!op.getPure() || op.getArgs().size() != 1)
       return failure();
 #define POPULATE_UNARY_OP(FUNC_NAME, DST_OP)                                   \
   if (!op.getSymbol().compare(FUNC_NAME)) {                                    \
@@ -1786,6 +1777,24 @@ public:
     POPULATE_UNARY_OP("__nv_cos", math::CosOp);
     POPULATE_UNARY_OP("__nv_tanf", math::TanOp);
     POPULATE_UNARY_OP("__nv_tan", math::TanOp);
+    POPULATE_UNARY_OP("__nv_asinf", math::AsinOp);
+    POPULATE_UNARY_OP("__nv_asin", math::AsinOp);
+    POPULATE_UNARY_OP("__nv_acosf", math::AcosOp);
+    POPULATE_UNARY_OP("__nv_acos", math::AcosOp);
+    POPULATE_UNARY_OP("__nv_atanf", math::AtanOp);
+    POPULATE_UNARY_OP("__nv_atan", math::AtanOp);
+    POPULATE_UNARY_OP("__nv_sinhf", math::SinhOp);
+    POPULATE_UNARY_OP("__nv_sinh", math::SinhOp);
+    POPULATE_UNARY_OP("__nv_coshf", math::CoshOp);
+    POPULATE_UNARY_OP("__nv_cosh", math::CoshOp);
+    POPULATE_UNARY_OP("__nv_tanhf", math::TanhOp);
+    POPULATE_UNARY_OP("__nv_tanhf", math::TanhOp);
+    POPULATE_UNARY_OP("__nv_acoshf", math::AcoshOp);
+    POPULATE_UNARY_OP("__nv_acosh", math::AcoshOp);
+    POPULATE_UNARY_OP("__nv_asinhf", math::AsinhOp);
+    POPULATE_UNARY_OP("__nv_asinh", math::AsinhOp);
+    POPULATE_UNARY_OP("__nv_atanhf", math::AtanhOp);
+    POPULATE_UNARY_OP("__nv_atanhf", math::AtanhOp);
     POPULATE_UNARY_OP("__nv_logf", math::LogOp);
     POPULATE_UNARY_OP("__nv_log", math::LogOp);
     POPULATE_UNARY_OP("__nv_log10f", math::Log10Op);
@@ -1818,7 +1827,6 @@ static void populateExternElementwiseOpToMLIROps(RewritePatternSet &patterns) {
   patterns.add<ExternElementwiseBinaryOpConverter,
                ExternElementwiseUnaryOpConverter>(patterns.getContext());
 }
-
 
 } // namespace
 

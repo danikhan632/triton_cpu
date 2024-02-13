@@ -145,6 +145,25 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_link_options(${Python3_LINK_OPTIONS})
   endif()
 
+  if (DEFINED TRITON_PLUGIN_DIRS)
+    foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
+      # Generate a list of plugin names by getting the last component of the provided paths.
+      # Note that each path must not end with a slash, otherwise cmake_path will return empty
+      # string as the name.
+      cmake_path(GET PLUGIN_DIR FILENAME PLUGIN_NAME)
+      if("${PLUGIN_NAME}" STREQUAL "")
+        message(FATAL_ERROR "Plugin dir ${PLUGIN_DIR} must not end with a slash")
+      endif()
+      list(APPEND TRITON_PLUGIN_NAMES ${PLUGIN_NAME})
+
+      # Include the plugin as part of the build, placing the build output under
+      # ${TRITON_BINARY_DIR}/third_party/${PLUGIN_NAME}
+      cmake_path(APPEND TRITON_BINARY_DIR "third_party" ${PLUGIN_NAME} OUTPUT_VARIABLE PLUGIN_DIR_BUILD_OUTPUT)
+      message(STATUS "Building plugin '${PLUGIN_NAME}' from ${PLUGIN_DIR} with output ${PLUGIN_DIR_BUILD_OUTPUT}")
+      add_subdirectory(${PLUGIN_DIR} ${PLUGIN_DIR_BUILD_OUTPUT})
+    endforeach()
+  endif()
+
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
@@ -191,6 +210,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Define triton library
   string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
+
+  if (DEFINED TRITON_PLUGIN_NAMES)
+    string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_BACKENDS_TUPLE} ${TRITON_PLUGIN_NAMES})
+  endif()
+
+  message(STATUS "Triton backends tuple: ${TRITON_BACKENDS_TUPLE}")
+
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc

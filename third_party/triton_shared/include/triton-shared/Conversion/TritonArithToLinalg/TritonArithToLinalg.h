@@ -3,7 +3,7 @@
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Dialect/Transform/IR/TransformDialect.h"
+
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir {

@@ -7,7 +7,7 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
-#include "triton-shared/Conversion/LinalgToVector/Passes.h"
+
 #include "triton-shared/Conversion/TritonToLinalg/Passes.h"
 #include "triton-shared/Conversion/TritonArithToLinalg/Passes.h"
 #include "triton-shared/Conversion/TritonToStructured/Passes.h"
@@ -36,7 +36,6 @@ inline void registerTritonSharedDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonToLinalgPass();
   mlir::triton::registerTritonToStructuredPass();
   mlir::triton::registerTritonArithToLinalgPasses();
-  mlir::registerLinalgToVectorPasses();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
 
@@ -44,6 +43,6 @@ inline void registerTritonSharedDialects(mlir::DialectRegistry &registry) {
   registry
       .insert<mlir::ttx::TritonTilingExtDialect, mlir::tts::TritonStructuredDialect, mlir::triton::TritonDialect,
               mlir::cf::ControlFlowDialect, mlir::triton::gpu::TritonGPUDialect,
-              mlir::math::MathDialect, mlir::arith::ArithDialect,  mlir::vector::VectorDialect,
-              mlir::scf::SCFDialect, mlir::gpu::GPUDialect, mlir::func::FuncDialect, mlir::linalg::LinalgDialect>();
+              mlir::math::MathDialect, mlir::arith::ArithDialect,
+              mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
 }
