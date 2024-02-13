@@ -210,11 +210,6 @@ module {
     }
     return
   }
-  module attributes {transform.with_named_sequence} {
-  transform.named_sequence @__transform_main(%module : !transform.any_op {transform.consumed}) {
-    %generic_map = transform.structured.match ops{["linalg.generic"]} in %module: (!transform.any_op) -> !transform.any_op
-    
-    transform.yield
-    }
-  }
+
 }
+
