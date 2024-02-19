@@ -1,3 +1,4 @@
+from typing import Optional
 from mlir.ir import *
 from mlir.dialects import transform
 from mlir.dialects.transform.structured import TileUsingForOp
@@ -6,61 +7,71 @@ from mlir.ir import *
 from mlir.dialects import linalg
 from mlir.dialects.transform.structured import TileUsingForOp
 from mlir.ir import *
-from mlir.dialects import linalg
-from mlir.ir import *
-from mlir.dialects import linalg
-from mlir.ir import *
-from mlir.dialects import linalg
-from mlir.dialects.transform.structured import TileUsingForOp
-from mlir.dialects import scf
-def run(code: str):
-    # Create and use a context for all MLIR operations
-    with Context() as ctx:
-        # Parse the input within the context
-        with Location.unknown(ctx):
-            module = Module.parse(code, ctx)
 
-        # Locate the matmul operation
-        matmul = None
-        parent_block=None
-        for op in module.operation.regions[0].blocks[0]:
+
+
+from mlir.ir import *
+from mlir.dialects.transform import structured as tx
+
+
+
+
+
+def extract_matmul(code: str):
+    with Context() as ctx, Location.unknown(ctx):
+        module = Module.parse(code)
+
+        # Initialize variables to hold the matmul operation and its parent block
+        matmul_op = None
+        parent_block = None
+
+        # Iterate through operations to find 'linalg.matmul'
+        for op in module.body.operations:
             if op.operation.name == "func.func":
-                for func_op in op.regions[0].blocks[0]:
-                    if func_op.operation.name == "linalg.matmul":
-                        matmul = func_op
-                        parent_block = op.regions[0].blocks[0]
+                for nested_op in op.regions[0].blocks[0].operations:
+                    if nested_op.name == "linalg.matmul":
+                        matmul_op = nested_op
+                        parent_block = op.regions[0].blocks[0]  # Capture the parent block
                         break
-                if matmul is not None:
+                if matmul_op is not None:
                     break
 
-        if matmul is None:
+        if matmul_op is None:
             print("linalg.matmul operation not found.")
-            return
+            parent_block = None
+        return matmul_op, parent_block
+        
 
-        # Apply tiling to the located matmul operation
-    # ... [previous code]
 
-    # Apply tiling to the located matmul operation
-# ... [previous code]
+def run(code: str):
+    with Context() as ctx, Location.unknown(ctx):
+        matmul_op, parent_block = extract_matmul(code)
+        static_sizes = [4, 4, 1]  # Example static sizes
+        # Conversion to appropriate attribute format
+        static_sizes_attr = ArrayAttr.get([IntegerAttr.get(IndexType.get(), size) for size in static_sizes])
 
-# Apply tiling to the located matmul operation
-# ... [previous code]
+        if matmul_op and parent_block:
+            # Check if the block has a terminator; if not, use the end of the block for insertion
+            if not parent_block.operations or not parent_block.operations[-1].is_terminator:
+                insertion_point = InsertionPoint(parent_block)  # Insert at the end of the block
+            else:
+                insertion_point = InsertionPoint.at_block_terminator(parent_block)
 
-# Apply tiling to the located matmul operation
-    if matmul:
-       
-        sizes_attr = ArrayAttr.get([IntegerAttr.get(IndexType.get(ctx), size) for size in [4, 4, 1]], ctx)
+            with insertion_point:
+                # Adjust the call to TileUsingForOp according to its correct signature
+                # Assuming 'matmul_op' is the target operation to tile and using static_sizes for simplicity
+                print(help(matmul_op))
+                tiled_op, loops = TileUsingForOp(
+                    tiled_linalg_op=matmul_op.operation,  # The operation as part of the resulting tiled op
+                    loops=[],  # Assuming no predefined loops
+                    target=matmul_op,  # The target operation to tile
+                    dynamic_sizes=[],  # Assuming no dynamic sizes for simplicity
+                    static_sizes=static_sizes_attr,  # Using static sizes
+                    loc=matmul_op.get_loc(),  # Location from the matmul operation
+                    ip=None  # Let the context manage the insertion point
+                )
+                print("Applied tiling to linalg.matmul operation with TileUsingForOp.")
 
-        # Use the block that contains the matmul operation as the insertion point
-        with InsertionPoint.at_block_terminator(parent_block):
-            # Construct TileUsingForOp with the correct arguments
-            # Note that 'target' is not used as a keyword argument
-            tiled_op, loops = TileUsingForOp(
-                matmul,  # The matmul operation is passed as a positional argument
-                sizes=sizes_attr,  # Pass the sizes as an ArrayAttr
-                loc=Location.unknown(ctx)  # Location is passed as a keyword argument
-            )
-        print("Applied tiling to linalg.matmul operation with TileUsingForOp.")
 
 
 if __name__ == '__main__':

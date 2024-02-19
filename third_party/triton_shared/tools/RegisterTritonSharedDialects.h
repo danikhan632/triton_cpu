@@ -42,7 +42,8 @@ inline void registerTritonSharedDialects(mlir::DialectRegistry &registry) {
   // TODO: register Triton & TritonGPU passes
   registry
       .insert<mlir::ttx::TritonTilingExtDialect, mlir::tts::TritonStructuredDialect, mlir::triton::TritonDialect,
-              mlir::cf::ControlFlowDialect, mlir::triton::gpu::TritonGPUDialect,
+              mlir::cf::ControlFlowDialect, mlir::triton::gpu::TritonGPUDialect,mlir::func::FuncDialect, mlir::memref::MemRefDialect,
+              mlir::bufferization::BufferizationDialect, mlir::linalg::LinalgDialect,
               mlir::math::MathDialect, mlir::arith::ArithDialect,
               mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
 }

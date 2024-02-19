@@ -399,7 +399,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+backends = [*BackendInstaller.copy(["nvidia", "amd", "triton_shared"]), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():

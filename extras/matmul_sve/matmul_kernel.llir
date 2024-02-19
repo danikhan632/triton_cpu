@@ -467,11 +467,13 @@ define void @matmul_kernel_0d1d2d34567c89c1011c(i64 %0, ptr %1, i64 %2, ptr %3, 
   br label %379
 
 379:                                              ; preds = %382, %378
+; 2ND INNERMOST LOOP BODY of matmul
   %380 = phi i64 [ %400, %382 ], [ 0, %378 ]
   %381 = icmp slt i64 %380, 16
   br i1 %381, label %382, label %401
 
 382:                                              ; preds = %379
+; 3RD INNERMOST LOOP BODY of matmul
   %383 = mul i64 %372, 16
   %384 = add i64 %383, %380
   %385 = getelementptr float, ptr %150, i64 %384
