@@ -24,24 +24,24 @@ struct ArmMatmulConversion : public OpRewritePattern<linalg::MatmulOp> {
 
   LogicalResult matchAndRewrite(linalg::MatmulOp op,
                                 PatternRewriter &rewriter) const override {
-
+    int useless =5;
     return success();
   }
 };
 
-using namespace mlir;
-namespace {
-struct GenericConversion : public OpRewritePattern<linalg::GenericOp> {
-  using OpRewritePattern<linalg::GenericOp>::OpRewritePattern;
+// using namespace mlir;
+// namespace {
+// struct GenericConversion : public OpRewritePattern<linalg::GenericOp> {
+//   using OpRewritePattern<linalg::GenericOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(linalg::GenericOp op,
-                                PatternRewriter &rewriter) const override {
+//   LogicalResult matchAndRewrite(linalg::GenericOp op,
+//                                 PatternRewriter &rewriter) const override {
+    
 
-
-    return success();
-  }
-};
-} 
+//     return success();
+//   }
+// };
+// } 
 
 
 
@@ -54,7 +54,8 @@ public:
     MLIRContext *context = func.getContext();
 
     RewritePatternSet patterns(context);
-    patterns.add<GenericConversion>(context);
+    // patterns.add<GenericConversion>(context);
+    patterns.add<ArmMatmulConversion>(context);
 
     (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
   }
