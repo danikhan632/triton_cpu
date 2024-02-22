@@ -8,6 +8,8 @@ on:
       - cmake/llvm-hash.txt
   workflow_dispatch:
 
+env:
+  SCCACHE_DIR: ${{ github.workspace }}/sccache
 
 permissions:
   contents: read
@@ -70,26 +72,30 @@ jobs:
     - name: Install Prerequisites
       shell: bash
       run: |
-        python3 -m pip install cmake 
+        python3 -m pip install cmake ninja sccache
+        mkdir -p ${{ env.SCCACHE_DIR }}
+        rm -rf ${{ env.SCCACHE_DIR }}/*
+
+    - name: Enable Cache
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
+        restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
+
 
 
     - name: Configure, Build, and Install LLVM (ubuntu arm64)
       if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'ubuntu'
       run: |
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-        echo "HELLO"
         mkdir arm-sysroot
         mkdir -p host-tools
         HOST_TOOLS="$(pwd)/host-tools"
-        mkdir -p llvm-project/build
-        # cmake --build llvm-project/build --target llvm-tblgen
-        # mv llvm-project/build/bin/llvm-tblgen host-tools/llvm-tblgen
-        # cmake --build llvm-project/build --target clang-tblgen
-        # mv llvm-project/build/bin/clang-tblgen host-tools/clang-tblgen
-        # cmake --build llvm-project/build --target mlir-tblgen
-        # mv llvm-project/build/bin/mlir-tblgen host-tools/mlir-tblgen
-        rm -rf llvm-project/build
-        mkdir -p llvm-project/build
+        cd host-tools
+        wget https://hackgtstoragebucket.s3.amazonaws.com/mlir-tblgen
+        wget https://hackgtstoragebucket.s3.amazonaws.com/llvm-tblgen
+        cd ..
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
@@ -106,7 +112,6 @@ jobs:
         -DLLVM_ENABLE_PROJECTS="mlir;llvm" \
         -DLLVM_BUILD_UTILS=ON \
         -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
-        -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
         -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DCMAKE_LINKER=$LINKER \
@@ -142,4 +147,4 @@ jobs:
 
         
     - name: Upload Tarball to AWS S3 Bucket
-      run: aws s3 cp "${llvm_install_dir}.tar.gz s3:/hackgtstoragebucket/"
+      run: aws s3 cp "${llvm_install_dir}.tar.gz s3://hackgtstoragebucket/${llvm_install_dir}.tar.gz"
