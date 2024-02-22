@@ -86,6 +86,7 @@ jobs:
         mkdir arm-sysroot
         mkdir -p host-tools
         HOST_TOOLS="$(pwd)/host-tools"
+        mkdir -p llvm-project/build
         cmake --build llvm-project/build --target llvm-tblgen
         mv llvm-project/build/bin/llvm-tblgen host-tools/llvm-tblgen
         cmake --build llvm-project/build --target clang-tblgen
