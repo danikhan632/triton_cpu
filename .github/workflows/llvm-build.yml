@@ -95,6 +95,8 @@ jobs:
         cd host-tools
         wget https://hackgtstoragebucket.s3.amazonaws.com/mlir-tblgen
         wget https://hackgtstoragebucket.s3.amazonaws.com/llvm-tblgen
+        sudo chmod 777 ./llvm-tblgen
+        sudo chmod 777 ./mlir-tblgen
         cd ..
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
