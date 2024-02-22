@@ -82,12 +82,12 @@ jobs:
         mkdir -p host-tools
         HOST_TOOLS="$(pwd)/host-tools"
         mkdir -p llvm-project/build
-        cmake --build llvm-project/build --target llvm-tblgen
-        mv llvm-project/build/bin/llvm-tblgen host-tools/llvm-tblgen
-        cmake --build llvm-project/build --target clang-tblgen
-        mv llvm-project/build/bin/clang-tblgen host-tools/clang-tblgen
-        cmake --build llvm-project/build --target mlir-tblgen
-        mv llvm-project/build/bin/mlir-tblgen host-tools/mlir-tblgen
+        # cmake --build llvm-project/build --target llvm-tblgen
+        # mv llvm-project/build/bin/llvm-tblgen host-tools/llvm-tblgen
+        # cmake --build llvm-project/build --target clang-tblgen
+        # mv llvm-project/build/bin/clang-tblgen host-tools/clang-tblgen
+        # cmake --build llvm-project/build --target mlir-tblgen
+        # mv llvm-project/build/bin/mlir-tblgen host-tools/mlir-tblgen
         rm -rf llvm-project/build
         mkdir -p llvm-project/build
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget
