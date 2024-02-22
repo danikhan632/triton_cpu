@@ -72,17 +72,14 @@ jobs:
     - name: Install Prerequisites
       shell: bash
       run: |
-        python3 -m pip install cmake ninja sccache
-        mkdir -p ${{ env.SCCACHE_DIR }}
-        rm -rf ${{ env.SCCACHE_DIR }}/*
-
-
+        python3 -m pip install cmake 
 
 
     - name: Configure, Build, and Install LLVM (ubuntu arm64)
       if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'ubuntu'
       run: |
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+        echo "HELLO"
         mkdir arm-sysroot
         mkdir -p host-tools
         HOST_TOOLS="$(pwd)/host-tools"
