@@ -90,6 +90,16 @@ jobs:
       run: |
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
         mkdir arm-sysroot
+        mkdir -p host-tools
+        HOST_TOOLS="$(pwd)/host-tools"
+        cmake --build llvm-project/build --target llvm-tblgen
+        mv llvm-project/build/bin/llvm-tblgen host-tools/llvm-tblgen
+        cmake --build llvm-project/build --target clang-tblgen
+        mv llvm-project/build/bin/clang-tblgen host-tools/clang-tblgen
+        cmake --build llvm-project/build --target mlir-tblgen
+        mv llvm-project/build/bin/mlir-tblgen host-tools/mlir-tblgen
+        rm -rf llvm-project/build
+        mkdir -p llvm-project/build
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
@@ -107,6 +117,9 @@ jobs:
         -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
         -DLLVM_ENABLE_PROJECTS="mlir;llvm" \
         -DLLVM_BUILD_UTILS=ON \
+        -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
+        -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
+        -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
