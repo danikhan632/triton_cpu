@@ -76,15 +76,6 @@ jobs:
         mkdir -p ${{ env.SCCACHE_DIR }}
         rm -rf ${{ env.SCCACHE_DIR }}/*
 
-    - name: Enable Cache
-      uses: actions/cache@v3
-      with:
-        path: ${{ env.SCCACHE_DIR }}
-        key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
-        restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
-
-
-
     - name: Configure, Build, and Install LLVM (ubuntu arm64)
       if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'ubuntu'
       run: |
@@ -155,4 +146,4 @@ jobs:
 
         
     - name: Upload Tarball to AWS S3 Bucket
-      run: aws s3 cp ${llvm_install_dir}.tar.gz s3:/hackgtstoragebucket/
+      run: aws s3 cp "${llvm_install_dir}.tar.gz s3:/hackgtstoragebucket/"
