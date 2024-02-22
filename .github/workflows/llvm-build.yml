@@ -90,14 +90,17 @@ jobs:
       run: |
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
         mkdir arm-sysroot
-        mkdir -p host-tools
+        mkdir -p llvm-project/host-tools
+        
+        cd llvm-project/host-tools
+        cmake -G Ninja ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang"
+        ninja mlir-tblgen
+        ninja llvm-tblgen
+        ninja clang-tblgen
+        cd ../..
+        mv ./llvm-project/host-tools/bin ./host-tools
         HOST_TOOLS="$(pwd)/host-tools"
-        cd host-tools
-        wget https://hackgtstoragebucket.s3.amazonaws.com/mlir-tblgen
-        wget https://hackgtstoragebucket.s3.amazonaws.com/llvm-tblgen
-        sudo chmod 777 ./llvm-tblgen
-        sudo chmod 777 ./mlir-tblgen
-        cd ..
+        rm -rf llvm-project/host-tools
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
@@ -115,6 +118,7 @@ jobs:
         -DLLVM_BUILD_UTILS=ON \
         -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
         -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
+        -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
@@ -145,8 +149,9 @@ jobs:
           mv "$file" "${file/x86_64/aarch64}"
         done
         cd $CURR_PWD
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" -C "${{ env.llvm_install_dir }}" .
+        tar czf "${{ env.llvm_install_dir }}.tar.gz" -C "${{ env.llvm_install_dir }}" 
+        mv "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}.tar.gzz"
 
         
     - name: Upload Tarball to AWS S3 Bucket
-      run: aws s3 cp "${llvm_install_dir}.tar.gz s3://hackgtstoragebucket/${llvm_install_dir}.tar.gz"
+      run: aws s3 cp "${llvm_install_dir}.tar.gzz s3://hackgtstoragebucket/${llvm_install_dir}.tar.gzz"
