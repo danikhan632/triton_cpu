@@ -8,8 +8,6 @@ on:
       - cmake/llvm-hash.txt
   workflow_dispatch:
 
-env:
-  SCCACHE_DIR: ${{ github.workspace }}/sccache
 
 permissions:
   contents: read
