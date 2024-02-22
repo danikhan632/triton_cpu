@@ -76,6 +76,15 @@ jobs:
         mkdir -p ${{ env.SCCACHE_DIR }}
         rm -rf ${{ env.SCCACHE_DIR }}/*
 
+    - name: Enable Cache
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
+        restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
+
+
+
     - name: Configure, Build, and Install LLVM (ubuntu arm64)
       if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'ubuntu'
       run: |
@@ -83,7 +92,6 @@ jobs:
         mkdir arm-sysroot
         mkdir -p host-tools
         HOST_TOOLS="$(pwd)/host-tools"
-        mkdir -p llvm-project/build
         cmake --build llvm-project/build --target llvm-tblgen
         mv llvm-project/build/bin/llvm-tblgen host-tools/llvm-tblgen
         cmake --build llvm-project/build --target clang-tblgen
@@ -105,8 +113,6 @@ jobs:
         echo $LINKER
         cmake -GNinja -Bllvm-project/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
         -DLLVM_ENABLE_PROJECTS="mlir;llvm" \
         -DLLVM_BUILD_UTILS=ON \
         -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
