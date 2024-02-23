@@ -47,15 +47,12 @@ jobs:
         LLVM_COMMIT_HASH="$(cat llvm-build/cmake/llvm-hash.txt)"
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
         echo "llvm_commit_hash=${LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
-
         SHORT_LLVM_COMMIT_HASH="${LLVM_COMMIT_HASH:0:8}"
         echo "Short LLVM commit hash: ${SHORT_LLVM_COMMIT_HASH}"
         echo "short_llvm_commit_hash=${SHORT_LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
-
         INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}"
         echo "LLVM installation directory name: ${INSTALL_DIR}"
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
-
     - name: Checkout LLVM
       uses: actions/checkout@v3
       with:
@@ -75,7 +72,6 @@ jobs:
         python3 -m pip install cmake ninja sccache
         mkdir -p ${{ env.SCCACHE_DIR }}
         rm -rf ${{ env.SCCACHE_DIR }}/*
-
     - name: Enable Cache
       uses: actions/cache@v3
       with:
@@ -90,6 +86,17 @@ jobs:
       run: |
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
         mkdir arm-sysroot
+        mkdir -p llvm-project/host-tools
+        
+        cd llvm-project/host-tools
+        cmake -G Ninja ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang"
+        ninja mlir-tblgen
+        ninja llvm-tblgen
+        ninja clang-tblgen
+        cd ../..
+        mv ./llvm-project/host-tools/bin ./host-tools
+        HOST_TOOLS="$(pwd)/host-tools"
+        rm -rf llvm-project/host-tools
         sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
@@ -103,10 +110,11 @@ jobs:
         echo $LINKER
         cmake -GNinja -Bllvm-project/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
         -DLLVM_ENABLE_PROJECTS="mlir;llvm" \
         -DLLVM_BUILD_UTILS=ON \
+        -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
+        -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
+        -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
@@ -126,19 +134,16 @@ jobs:
         -DCMAKE_OBJDUMP="/usr/bin/aarch64-linux-gnu-objdump" \
         -DCMAKE_RANLIB="/usr/bin/aarch64-linux-gnu-ranlib" \
         -DCMAKE_STRIP="/usr/bin/aarch64-linux-gnu-strip" \
-        -DLLVM_DEFAULT_TARGET_TRIPLE=arm-linux-gnueabihf
-        -DLLVM_TARGET_ARCH=ARM \
-        -DLLVM_TARGETS_TO_BUILD=ARM \
         -DCMAKE_SYSROOT=$SYSROOT \
         -DLLVM_ENABLE_TERMINFO=OFF \
         llvm-project/llvm
-
         ninja -C llvm-project/build install
         CURR_PWD="$(pwd)" #fixing since its named after host
         cd "${{ env.llvm_install_dir }}/python_packages/mlir_core/mlir/_mlir_libs/"
         for file in *x86_64*; do
           mv "$file" "${file/x86_64/aarch64}"
         done
+        cd $CURR_PWD
         cd /home/runner/work/triton_cpu/triton_cpu
         tar czf llvm-0784b1ee-ubuntu-arm64.tar.gz ./llvm-0784b1ee-ubuntu-arm64
 
