@@ -139,11 +139,9 @@ jobs:
         for file in *x86_64*; do
           mv "$file" "${file/x86_64/aarch64}"
         done
-        cd $CURR_PWD
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" -C "${{ env.llvm_install_dir }}" .
+        cd /home/runner/work/triton_cpu/triton_cpu
+        tar czf llvm-0784b1ee-ubuntu-arm64.tar.gz ./llvm-0784b1ee-ubuntu-arm64
 
         
     - name: Upload Tarball to AWS S3 Bucket
       run: aws s3 cp llvm-0784b1ee-ubuntu-arm64.tar.gz s3://hackgtstoragebucket/llvm-0784b1ee-ubuntu-arm64.tar.gz
-
-
