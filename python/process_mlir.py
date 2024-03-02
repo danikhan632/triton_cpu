@@ -10,12 +10,12 @@ def print_colored(text, color):
     else:
         print(text)
 
-def run_command(command, success_color="green", error_color="red"):
+def run_command(command, success_color="green", error_color="cyan"):
     try:
         output = subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
         print_colored(output, success_color)
     except subprocess.CalledProcessError as e:
-        print_colored(f"Error: {e.output}", error_color)
+        print_colored(f"{e.output}", "yellow")
 
 def process_file(file_path, shared_opt_path, arm_opt_path):
     output_file = "/tmp/output.mlir"
@@ -26,11 +26,11 @@ def process_file(file_path, shared_opt_path, arm_opt_path):
 
     # Display output file content
     with open(output_file, "r") as file:
-        print_colored(file.read(), "cyan")
+        print_colored(file.read(), "green")
 
     # Run ARM optimization
     print("Running triton-arm-opt...")
-    run_command([arm_opt_path, output_file, "-am"], "yellow")
+    run_command([arm_opt_path, output_file, "-am"], "magenta")
 
 if __name__ == "__main__":
     os.system("clear")

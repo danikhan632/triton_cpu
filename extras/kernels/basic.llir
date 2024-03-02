@@ -1,4 +1,4 @@
-module {
+ module {
   func.func @load_store_prefetch(%arg0: memref<4x4xi32>, %arg1: index) {
     %0 = builtin.unrealized_conversion_cast %arg0 : memref<4x4xi32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
     %1 = builtin.unrealized_conversion_cast %arg1 : index to i64
@@ -12,7 +12,7 @@ module {
     %9 = llvm.mlir.constant(4 : index) : i64
     %10 = llvm.mul %1, %9  : i64
     %11 = llvm.add %10, %1  : i64
-    %12 = llvm.getelementptr %8[%11] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+    %12 = llvm.getelementptr %8[%11] : (!llvm.ptr, i64) -> !lhttps://buynow.rideshift.com/details/5XXG14J25NG148203?_gl=1*buhx5h*_ga*NzI3MzcyMDg1LjE3MDgwMTQxMjg.*_ga_L2GDK8MPQS*MTcwODk2MTM3NS4zOS4xLjE3MDg5NjE2MTAuNTkuMC4w&_ga=2.42582629.1767544133.1708954942-727372085.1708014128vlvm.ptr, i32
     %13 = llvm.load %12 : !llvm.ptr -> i32
     %14 = llvm.extractvalue %0[1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
     %15 = llvm.mlir.constant(4 : index) : i64
