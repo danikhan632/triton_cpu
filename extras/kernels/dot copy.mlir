@@ -1,6 +1,7 @@
+
 #map = affine_map<(d0, d1) -> (d0, d1)>
 module {
-  func.func @kernel(%arg0: memref<*xbf16>, %arg1: memref<*xbf16>, %arg2: memref<*xbf16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32) {
+  func.func @main(%arg0: memref<*xbf16>, %arg1: memref<*xbf16>, %arg2: memref<*xbf16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32) {
     %cst = arith.constant 0.000000e+00 : bf16
     %c256 = arith.constant 256 : index
     %c128 = arith.constant 128 : index
@@ -20,7 +21,14 @@ module {
     %3 = bufferization.to_tensor %alloc_3 restrict writable : memref<128x256xbf16>
     %4 = tensor.empty() : tensor<128x256xbf16>
     %5 = linalg.fill ins(%cst : bf16) outs(%4 : tensor<128x256xbf16>) -> tensor<128x256xbf16>
-    %6 = linalg.matmul ins(%0, %transposed : tensor<128x64xbf16>, tensor<64x256xbf16>) outs(%5 : tensor<128x256xbf16>) -> tensor<128x256xbf16>
+    %16 = "linalg.matmul"(%5, %10, %15) <{operandSegmentSizes = array<i32: 2, 1>}> ({
+    ^bb0(%arg9: bf16, %arg10: bf16, %arg11: bf16):
+      %18 = "arith.mulf"(%arg9, %arg10) <{fastmath = #arith.fastmath<none>}> : (bf16, bf16) -> bf16
+      %19 = "arith.addf"(%arg11, %18) <{fastmath = #arith.fastmath<none>}> : (bf16, bf16) -> bf16
+      "linalg.yield"(%19) : (bf16) -> ()
+    }) {linalg.memoized_indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>, affine_map<(d0, d1, d2) -> (d2, d1)>, affine_map<(d0, d1, d2) -> (d0, d1)>]} : (tensor<128x64xbf16>, tensor<64x256xbf16>, tensor<128x256xbf16>) -> tensor<128x256xbf16>
+        
+        
     %7 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%6, %3 : tensor<128x256xbf16>, tensor<128x256xbf16>) outs(%6 : tensor<128x256xbf16>) {
     ^bb0(%in: bf16, %in_4: bf16, %out: bf16):
       %8 = arith.addf %in, %in_4 : bf16

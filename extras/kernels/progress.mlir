@@ -25,7 +25,10 @@
     scf.yield %10 : tensor<128x256xbf16>
   }
   scf.yield %9 : tensor<128x256xbf16>
-}%9 = scf.for %arg11 = %c0_7 to %c256_8 step %c4_9 iter_args(%arg12 = %arg10) -> (tensor<128x256xbf16>) {
+}
+
+
+%9 = scf.for %arg11 = %c0_7 to %c256_8 step %c4_9 iter_args(%arg12 = %arg10) -> (tensor<128x256xbf16>) {
   %10 = scf.for %arg13 = %c0_10 to %c64 step %c1_11 iter_args(%arg14 = %arg12) -> (tensor<128x256xbf16>) {
     %extracted_slice = tensor.extract_slice %0[%arg9, %arg13] [4, 1] [1, 1] : tensor<128x64xbf16> to tensor<4x1xbf16>
     %extracted_slice_12 = tensor.extract_slice %transposed[%arg13, %arg11] [1, 4] [1, 1] : tensor<64x256xbf16> to tensor<1x4xbf16>
