@@ -20,17 +20,17 @@ def run_command(command, success_color="green", error_color="cyan"):
 def process_file(file_path, shared_opt_path, arm_opt_path):
     output_file = "/tmp/output.mlir"
 
-    # Run shared optimization
-    print("Running triton-shared-opt...")
-    run_command([shared_opt_path, file_path, "--triton-to-linalg", "-o", output_file], "yellow")
+    # # Run shared optimization
+    # print("Running triton-shared-opt...")
+    # run_command([shared_opt_path, file_path, "--triton-to-linalg", "-o", output_file], "yellow")
 
     # Display output file content
-    with open(output_file, "r") as file:
-        print_colored(file.read(), "green")
+    # with open(output_file, "r") as file:
+    #     print_colored(file.read(), "green")
 
     # Run ARM optimization
     print("Running triton-arm-opt...")
-    run_command([arm_opt_path, output_file, "-am"], "magenta")
+    run_command([arm_opt_path, file_path, "-am"], "magenta")
 
 if __name__ == "__main__":
     os.system("clear")
