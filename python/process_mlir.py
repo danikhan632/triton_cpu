@@ -30,7 +30,7 @@ def process_file(file_path, shared_opt_path, arm_opt_path):
 
     # Run ARM optimization
     print("Running triton-arm-opt...")
-    run_command([arm_opt_path, file_path, "-am"], "magenta")
+    run_command([arm_opt_path, file_path, "-sme-converison"], "magenta")
 
 if __name__ == "__main__":
     os.system("clear")
