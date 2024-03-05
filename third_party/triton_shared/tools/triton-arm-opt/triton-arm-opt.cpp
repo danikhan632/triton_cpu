@@ -51,8 +51,6 @@ struct OuterProductVectorizationPass : public PassWrapper<OuterProductVectorizat
     }
   }
 };
-//------------------------------------------------------------------------------------------------------------------------------------
-
 
 
   struct MatmulTileConversion: public OpRewritePattern <linalg::MatmulOp> {
@@ -60,17 +58,17 @@ struct OuterProductVectorizationPass : public PassWrapper<OuterProductVectorizat
 
     LogicalResult matchAndRewrite(linalg::MatmulOp op, PatternRewriter & rewriter) const override {
 
-      SmallVector < int64_t, 3 > tileSizes = {4, 4,1}; // Tile sizes for [M, N, K] dimensions tofo
+      SmallVector<int64_t, 3> tileSizes = {4, 4,1}; // Tile sizes for [M, N, K] dimensions tofo
 
 
-      LinalgTilingOptions tilingOptions = LinalgTilingOptions().setTileSizes(tileSizes);
+      linalg::LinalgTilingOptions tilingOptions = linalg::LinalgTilingOptions().setTileSizes(tileSizes);
       auto tiledOpResult = tileLinalgOp(rewriter, op, tilingOptions);
       if (failed(tiledOpResult)) {
         std::cout << "TILING FAILED" << std::endl;
         return failure();
       }
 
-      if (failed(vectorize(rewriter, cast<LinalgOp> (tiledOpResult->op.getOperation())))) {
+      if (failed(linalg::vectorize(rewriter, cast<linalg::LinalgOp> (tiledOpResult->op.getOperation())))) {
         return failure();
       }
       MLIRContext *context = getContext();
@@ -85,7 +83,7 @@ struct OuterProductVectorizationPass : public PassWrapper<OuterProductVectorizat
   class MatmulTileConversionPass
     : public PassWrapper <MatmulTileConversionPass, OperationPass <func::FuncOp>> {
       public: void getDependentDialects(DialectRegistry & registry) const override {
-        registry.insert <linalg::LinalgDialect, mlir::func::FuncDialect, scf::SCFDialect, mlir::vector::VectorDialect> ();
+        registry.insert <linalg::LinalgDialect, func::FuncDialect, scf::SCFDialect, vector::VectorDialect> ();
       }
 
       void runOnOperation() override {
@@ -97,7 +95,7 @@ struct OuterProductVectorizationPass : public PassWrapper<OuterProductVectorizat
         patterns.add<MatmulTileConversion>(context);
 
         ConversionTarget target( * context);
-        target.addLegalDialect <linalg::LinalgDialect, mlir::func::FuncDialect, mlir::vector::VectorDialect, mlir::affine::AffineDialect, scf::SCFDialect> ();
+        target.addLegalDialect <linalg::LinalgDialect, func::FuncDialect, vector::VectorDialect, affine::AffineDialect, scf::SCFDialect> ();
 
         if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
           signalPassFailure();
@@ -139,7 +137,7 @@ int main(int argc, char ** argv) {
   );
 
 
-  return mlir::asMainReturnCode(
-    mlir::MlirOptMain(argc, argv, "Optimizer Driver\n", registry)
+  return asMainReturnCode(
+    MlirOptMain(argc, argv, "Optimizer Driver\n", registry)
   );
 }

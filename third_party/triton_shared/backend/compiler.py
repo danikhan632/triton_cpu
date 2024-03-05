@@ -10,12 +10,26 @@ import subprocess
 import functools
 from pathlib import Path
 
+def printc(obj, color="cyan"): #makes things easier to see
+    color_code = {
+        "black": "30", "red": "31", "green": "32", "yellow": "33",
+        "blue": "34", "magenta": "35", "cyan": "36", "white": "37"
+    }
+    colored_text = f"\033[{color_code[color]}m{obj}\033[0m" if color in color_code else obj
+    print(colored_text)
+
 def _get_triton_shared_opt_path() -> str:
     path = os.getenv("TRITON_SHARED_OPT_PATH", "")
     if path == "":
         raise Exception("TRITON_SHARED_OPT_PATH is not set.")
     return path
 
+
+def _get_triton_SME_path() -> str:
+    path = os.getenv("TRITON_SME_PATH", "")
+    if path == "":
+        raise Exception("TRITON_SME_PATH is not set.")
+    return path
 
 def _get_llvm_bin_path(bin_name: str) -> str:
     path = os.getenv("LLVM_BINARY_DIR", "")
@@ -37,11 +51,18 @@ def _ttir_to_ttsharedir(mod):
 
 
 def _optimize_ttsharedir(ttsharedir: str):
-    # We don't apply any optimizations now, but we can add passes if needed.
-    return ttsharedir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = os.path.join(tmpdir, "ttshared.mlir")
+        dst_path = os.path.join(tmpdir, "ttsme.mlir")
+        Path(src_path).write_text(ttsharedir)
+        triton_shared_opt_path = _get_triton_SME_path()
+        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-converison", "-o", dst_path])
+        res= Path(dst_path).read_text()
+        printc(res)
+        return res
 
 
-def _ttsharedir_to_llir(ttsharedir: str):
+def _ttsharedir_to_llir(ttsharedir: str): #going to need to add some flags to this
     with tempfile.TemporaryDirectory() as tmpdir:
         ttshared_path = os.path.join(tmpdir, "ttshared.mlir")
         llmlir_path = os.path.join(tmpdir, "ll.mlir")
