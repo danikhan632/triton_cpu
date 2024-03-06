@@ -16,11 +16,76 @@
 #include <llvm/Support/raw_ostream.h>
 
 
-
 using namespace mlir;
+
+//------------------------------------------------------------------------------
+
 
 
 namespace {
+
+
+
+
+
+struct PrefetchPattern : public OpRewritePattern<linalg::MatmulOp> {
+  using OpRewritePattern<linalg::MatmulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::MatmulOp matmulOp,
+                                PatternRewriter &rewriter) const override {
+    auto loc = matmulOp.getLoc();
+    auto aMemRef = matmulOp.getDpsInputOperand(0)->get();
+    auto bMemRef = matmulOp.getDpsInputOperand(1)->get();
+
+    auto aMemRefType = aMemRef.getType().cast<MemRefType>();
+    auto bMemRefType = bMemRef.getType().cast<MemRefType>();
+    auto aShape = aMemRefType.getShape();
+    auto bShape = bMemRefType.getShape();
+
+    auto aPrefetchShape = llvm::ArrayRef<int64_t>{aShape[0], 16};
+    auto bPrefetchShape = llvm::ArrayRef<int64_t>{16, bShape[1]};
+
+    auto aPrefetchMemRef = rewriter.create<memref::AllocOp>(loc, MemRefType::get(aPrefetchShape, aMemRefType.getElementType()));
+    auto bPrefetchMemRef = rewriter.create<memref::AllocOp>(loc, MemRefType::get(bPrefetchShape, bMemRefType.getElementType()));
+
+    auto aOffset = llvm::ArrayRef<int64_t>{0, 0};
+    auto bOffset = llvm::ArrayRef<int64_t>{0, 0};
+    auto aSize = llvm::ArrayRef<int64_t>{aShape[0], std::min<int64_t>(16, aShape[1])};
+    auto bSize = llvm::ArrayRef<int64_t>{std::min<int64_t>(16, bShape[0]), bShape[1]};
+    auto aStride = llvm::ArrayRef<int64_t>{1, 1};
+    auto bStride = llvm::ArrayRef<int64_t>{1, 1};
+
+    auto aSubview = rewriter.create<memref::SubViewOp>(loc, aMemRef, aOffset, aSize, aStride);
+    auto bSubview = rewriter.create<memref::SubViewOp>(loc, bMemRef, bOffset, bSize, bStride);
+
+    rewriter.create<memref::CopyOp>(loc, aSubview, aPrefetchMemRef);
+    rewriter.create<memref::CopyOp>(loc, bSubview, bPrefetchMemRef);
+
+    rewriter.replaceOpWithNewOp<linalg::MatmulOp>(matmulOp, matmulOp.getType(0), ValueRange{aPrefetchMemRef, bPrefetchMemRef}, matmulOp->getAttrs());
+
+    return success();
+  }
+};
+
+struct PrefetchPass : public PassWrapper<PrefetchPass, OperationPass<func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PrefetchPass)
+
+  void runOnOperation() override {
+    auto funcOp = getOperation();
+
+    RewritePatternSet patterns(&getContext());
+    patterns.add<PrefetchPattern>(&getContext());
+
+    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+      signalPassFailure();
+    }
+  }
+};
+
+
+
+//----------------------------------------------------------------------------------
+
 struct OuterProductVectorizationPass : public PassWrapper<OuterProductVectorizationPass, OperationPass<func::FuncOp>> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<vector::VectorDialect, func::FuncDialect>();
@@ -106,8 +171,11 @@ struct OuterProductVectorizationPass : public PassWrapper<OuterProductVectorizat
   std::unique_ptr <Pass> createOuterProductVectorizationPass() {
     return std::make_unique <OuterProductVectorizationPass>();
   }
-    std::unique_ptr <Pass> createMatmulTileConversionPass() {
+  std::unique_ptr <Pass> createMatmulTileConversionPass() {
     return std::make_unique <MatmulTileConversionPass>();
+  }
+  std::unique_ptr<Pass> createPrefetchPass() {
+    return std::make_unique<PrefetchPass>();
   }
 }
 

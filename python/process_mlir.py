@@ -29,7 +29,7 @@ def process_file(file_path, shared_opt_path, arm_opt_path):
     #     print_colored(file.read(), "green")
 
     # Run ARM optimization
-    print("Running triton-arm-opt...")
+    print("Running triton-sme-opt...")
     run_command([arm_opt_path, file_path, "-sme-converison"], "magenta")
 
 if __name__ == "__main__":
@@ -39,7 +39,7 @@ if __name__ == "__main__":
         sys.exit(1)
     file_path = sys.argv[1]
     triton_shared_opt_path = "/home/green/code/triton-cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt"
-    triton_arm_opt_path = "/home/green/code/triton-cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-arm-opt/triton-arm-opt"
+    triton_arm_opt_path = "/home/green/code/triton-cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-sme-opt/triton-sme-opt"
     
     process_file(file_path, triton_shared_opt_path, triton_arm_opt_path)
 
