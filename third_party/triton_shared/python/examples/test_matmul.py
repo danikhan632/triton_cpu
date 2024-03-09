@@ -152,15 +152,15 @@ def test_matmul():
     cols1 = 167
     rows2 = 167
     cols2 = 321
-    a = torch.randn((rows1, cols1), device='cpu', dtype=torch.float32)
-    b = torch.randn((rows2, cols2), device='cpu', dtype=torch.float32)
+    a = torch.randn((rows1, cols1), device='cpu', dtype=torch.float16)
+    b = torch.randn((rows2, cols2), device='cpu', dtype=torch.float16)
     # a = torch.full((rows1, cols1), 1, device='cpu', dtype=torch.float32)
     # b = torch.full((rows2, cols2), 1, device='cpu', dtype=torch.float32)
     triton_output = matmul(a, b)
     torch_output = torch.matmul(a, b)
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
-    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+    if torch.allclose(triton_output, torch_output, atol=1e-3, rtol=0):
         print("✅ Triton and Torch match")
     else:
         print("❌ Triton and Torch differ")

@@ -49,7 +49,7 @@ def _ttir_to_ttsharedir(mod):
 
 
 def _optimize_ttsharedir(ttsharedir: str):
-    printc(_get_triton_SME_path(), "red")
+
     if  _get_triton_SME_path() == "":
         return ttsharedir
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -57,35 +57,50 @@ def _optimize_ttsharedir(ttsharedir: str):
         dst_path = os.path.join(tmpdir, "ttsme.mlir")
         Path(src_path).write_text(ttsharedir)
         triton_shared_opt_path = _get_triton_SME_path()
-        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-converison", "-o", dst_path])
+        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-conversion", "-o", dst_path])
         output= Path(dst_path).read_text()
         printc(output)
+        # if "vector.contract" in output:
+        #     raise Exception("SME conversion failed, vector.contract found in output")
+        pre_outer =open("/home/green/code/triton-cpu/extras/kernels/pre_outer.mlir","r").read()
+        if output.strip() == pre_outer.strip():
+            raise Exception("SME conversion failed, output is same as pre_outer.mlir")
         return output
 
-
-def _ttsharedir_to_llir(ttsharedir: str): #going to need to add some flags to this, recent changes to SME feature flags 
+def _ttsharedir_to_llir(ttsharedir: str):
     with tempfile.TemporaryDirectory() as tmpdir:
         ttshared_path = os.path.join(tmpdir, "ttshared.mlir")
         llmlir_path = os.path.join(tmpdir, "ll.mlir")
         llir_path = os.path.join(tmpdir, "ll.ir")
         Path(ttshared_path).write_text(ttsharedir)
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
+        
         # TritonShared-MLIR to LLVM-MLIR
-        subprocess.check_call([mlir_opt_path, ttshared_path,
+        subprocess.check_call([
+            mlir_opt_path,
+            ttshared_path,
+
             "--convert-linalg-to-affine-loops",
+            "--allow-unregistered-dialect",
             "--eliminate-empty-tensors",
+            "--convert-cf-to-llvm",
+            "--arm-sve-legalize-vector-storage",
+            "--allocate-arm-sme-tiles",
             "--empty-tensor-to-alloc-tensor",
             "--one-shot-bufferize=allow-return-allocs-from-loops=true",
             "--lower-affine",
             "--convert-linalg-to-loops",
+            "--convert-arm-sme-to-scf",
             "--convert-scf-to-cf",
             "--convert-cf-to-llvm",
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
-            "--convert-vector-to-llvm",
+            "--convert-vector-to-arm-sme",
+            "--convert-arm-sme-to-llvm",
             "--convert-index-to-llvm",
             "--memref-expand",
+            "-convert-vector-to-llvm=enable-arm-sve",
             "--expand-strided-metadata",
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
@@ -94,10 +109,12 @@ def _ttsharedir_to_llir(ttsharedir: str): #going to need to add some flags to th
             # so we have to run these two passes again here.
             "--lower-affine",
             "--convert-arith-to-llvm",
+            "--convert-cf-to-llvm",
             # Remove all unrealized casts created
-            "--reconcile-unrealized-casts",
+            "--canonicalize",
             "-o",
-            llmlir_path])
+            llmlir_path,
+        ])
 
         # LLVM-MLIR to LLVM-IR
         mlir_translate_path = _get_llvm_bin_path("mlir-translate")
@@ -106,6 +123,7 @@ def _ttsharedir_to_llir(ttsharedir: str): #going to need to add some flags to th
             "-o",
             llir_path])
         return Path(llir_path).read_text()
+
 
 
 def _optimize_llir(llir: str):
