@@ -206,15 +206,10 @@ struct OuterProductVectorizationPass
     ConversionTarget target(*context);
 
 
-  transform::ApplyLowerMaskedTransfersPatternsOp lowerMaskedTransfersOp;
- 
-  lowerMaskedTransfersOp.populatePatterns(patterns);
-  vector::populateVectorTransferDropUnitDimsPatterns(patterns);
-  vector::populateVectorReductionToContractPatterns(patterns);
-
-  
-  
-  
+    transform::ApplyLowerMaskedTransfersPatternsOp lowerMaskedTransfersOp;
+    lowerMaskedTransfersOp.populatePatterns(patterns);
+    vector::populateVectorTransferDropUnitDimsPatterns(patterns);
+    vector::populateVectorReductionToContractPatterns(patterns);
 
     if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
       return signalPassFailure();
