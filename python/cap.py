@@ -1,0 +1,4 @@
+import os
+
+out =os.popen("/home/green/.triton/llvm/llvm-4017f04e-ubuntu-x64/bin/mlir-opt /home/green/code/triton-cpu/extras/kernels/sme_matmul.mlir --debug -transform-interpreter --test-transform-dialect-erase-schedule -canonicalize -convert-vector-to-arm-sme -allocate-arm-sme-tiles --convert-arm-sme-to-scf -enable-arm-streaming=\"streaming-mode=streaming-locally za-mode=new-za only-if-required-by-ops\" -convert-vector-to-scf -cse -arm-sve-legalize-vector-storage -convert-arm-sme-to-llvm -convert-vector-to-llvm=enable-arm-sve -cse -canonicalize -test-lower-to-llvm").read()
+open("dsds.txt","w").write(out)
