@@ -18,6 +18,10 @@
 #include <iostream>
 #include <llvm/Support/raw_ostream.h>
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/Tensor/Transforms/Passes.h"
+
+
 using namespace mlir;
 constexpr int64_t MAX_LOOPS = 64;
 //------------------------------------------------------------------------------
@@ -206,10 +210,21 @@ struct OuterProductVectorizationPass
     ConversionTarget target(*context);
 
 
-    transform::ApplyLowerMaskedTransfersPatternsOp lowerMaskedTransfersOp;
-    lowerMaskedTransfersOp.populatePatterns(patterns);
-    vector::populateVectorTransferDropUnitDimsPatterns(patterns);
+      // Apply patterns for lowering masked transfers
+    vector::populateVectorMaskLoweringPatternsForSideEffectingOps(patterns);
+
+    // Apply patterns for transfer permutation
     vector::populateVectorReductionToContractPatterns(patterns);
+
+    // Apply patterns for reduction to contract
+    vector::populateVectorReductionToContractPatterns(patterns);
+
+    vector::populateVectorMaskOpLoweringPatterns(patterns);
+    vector::populateVectorTransferDropUnitDimsPatterns(patterns);
+    vector::VectorTransformsOptions vectorTransformOptions;
+    
+    vectorTransformOptions.setVectorTransformsOptions(vector::VectorContractLowering::OuterProduct);
+    vector::populateVectorContractLoweringPatterns(patterns, vectorTransformOptions);
 
     if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
       return signalPassFailure();
@@ -348,9 +363,10 @@ int main(int argc, char **argv) {
       "sme-conversion",
       "Converts linalg.matmul to a more optimized form using SME",
       [](OpPassManager &pm) {
-        pm.addPass(createMatmulTileConversionPass(true));
+        pm.addPass(createMatmulTileConversionPass(true));    
         pm.addPass(createOuterProductVectorizationPass());
-        // pm.addPass(createLoopUnrollPass());
+        // pm.addPass(createLinalgBufferizePass());
+        //pm.addPass(mlir::tensor::createTensorBufferizePass());
       });
 
   PassPipelineRegistration<> sveConversionPipeline(
@@ -358,6 +374,7 @@ int main(int argc, char **argv) {
       "Converts linalg.matmul to a more optimized form using SME",
       [](OpPassManager &pm) {
         pm.addPass(createMatmulTileConversionPass(false));
+        pm.addPass(createLinalgBufferizePass());
         pm.addPass(createOuterProductVectorizationPass());
         // pm.addPass(createLoopUnrollPass());
       });

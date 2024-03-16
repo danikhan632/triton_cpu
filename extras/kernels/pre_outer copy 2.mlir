@@ -25,8 +25,8 @@ module {
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %cst_1 = arith.constant 0.000000e+00 : f32
-    %0 = tensor.empty() : tensor<32x64xf32>
-    // %1 = linalg.fill ins(%cst_1 : f32) outs(%0 : tensor<32x64xf32>) -> tensor<32x64xf32>
+    %0 = memref.alloc() : memref<32x64xf32>
+    linalg.fill ins(%cst_1 : f32) outs(%0 : memref<32x64xf32>)
     %2 = arith.addi %arg3, %c31_i32 : i32
     %3 = arith.divsi %2, %c32_i32 : i32
     %4 = arith.addi %arg4, %c63_i32 : i32
@@ -75,7 +75,7 @@ module {
     %43 = arith.index_cast %arg7 : i32 to index
     %44 = arith.index_cast %arg4 : i32 to index
     %45 = arith.index_cast %16 : i32 to index
-    %46:7 = scf.for %arg15 = %c0_i32 to %37 step %c1_i32 iter_args(%arg16 = %1, %arg17 = %reinterpret_cast, %arg18 = %reinterpret_cast_3, %arg19 = %42, %arg20 = %c0, %arg21 = %reinterpret_cast_2, %arg22 = %reinterpret_cast_4) -> (tensor<32x64xf32>, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>, index, index, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>)  : i32 {
+    %46:7 = scf.for %arg15 = %c0_i32 to %37 step %c1_i32 iter_args(%arg16 = %0, %arg17 = %reinterpret_cast, %arg18 = %reinterpret_cast_3, %arg19 = %42, %arg20 = %c0, %arg21 = %reinterpret_cast_2, %arg22 = %reinterpret_cast_4) -> (memref<32x64xf32>, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>, index, index, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>)  : i32 {
       %66 = arith.muli %arg15, %c16_i32 : i32
       %67 = arith.subi %arg5, %66 : i32
       %alloc = memref.alloc() : memref<32x16xf16>
@@ -94,7 +94,7 @@ module {
       %subview_9 = memref.subview %alloc[%71, 0] [%72, %69] [1, 1] : memref<32x16xf16> to memref<?x?xf16, strided<[16, 1], offset: ?>>
       memref.copy %subview_6, %subview_8 : memref<?x?xf16, strided<[?, ?], offset: ?>> to memref<?x?xf16, strided<[16, 1]>>
       memref.copy %subview_7, %subview_9 : memref<?x?xf16, strided<[?, ?], offset: ?>> to memref<?x?xf16, strided<[16, 1], offset: ?>>
-      %73 = bufferization.to_tensor %alloc restrict writable : memref<32x16xf16>
+
       %alloc_10 = memref.alloc() : memref<16x64xf16>
       %74 = arith.index_cast %67 : i32 to index
       %75 = arith.minsi %74, %c16 : index
@@ -111,46 +111,45 @@ module {
       %subview_15 = memref.subview %alloc_10[0, %77] [%75, %78] [1, 1] : memref<16x64xf16> to memref<?x?xf16, strided<[64, 1], offset: ?>>
       memref.copy %subview_12, %subview_14 : memref<?x?xf16, strided<[?, ?], offset: ?>> to memref<?x?xf16, strided<[64, 1]>>
       memref.copy %subview_13, %subview_15 : memref<?x?xf16, strided<[?, ?], offset: ?>> to memref<?x?xf16, strided<[64, 1], offset: ?>>
-      %79 = bufferization.to_tensor %alloc_10 restrict writable : memref<16x64xf16>
-      %80 = tensor.empty() : tensor<32x64xf32>
-      %81 = linalg.fill ins(%cst_1 : f32) outs(%80 : tensor<32x64xf32>) -> tensor<32x64xf32>
+      %80 = memref.alloc() : memref<32x64xf32>
+      linalg.fill ins(%cst_1 : f32) outs(%0 : memref<32x64xf32>)
       %82 = vector.vscale
       %83 = arith.muli %82, %c4 : index
       %84 = arith.muli %82, %c4 : index
-      %85 = scf.for %arg23 = %c0 to %c32 step %83 iter_args(%arg24 = %81) -> (tensor<32x64xf32>) {
-        %103 = scf.for %arg25 = %c0 to %c64 step %84 iter_args(%arg26 = %arg24) -> (tensor<32x64xf32>) {
-          %104 = scf.for %arg27 = %c0 to %c16 step %c1 iter_args(%arg28 = %arg26) -> (tensor<32x64xf32>) {
+      %85 = scf.for %arg23 = %c0 to %c32 step %83 iter_args(%arg24 = %80) -> (memref<32x64xf32>) {
+  %103 = scf.for %arg25 = %c0 to %c64 step %84 iter_args(%arg26 = %arg24) -> (memref<32x64xf32>) {
+    %104 = scf.for %arg27 = %c0 to %c16 step %c1 iter_args(%arg28 = %arg26) -> (memref<32x64xf32>) {
+          
             %105 = affine.min #map(%arg23, %83)
             %106 = affine.min #map1(%arg25, %84)
             %107 = affine.min #map(%arg23, %83)
             %108 = affine.min #map1(%arg25, %84)
-            %extracted_slice_20 = tensor.extract_slice %73[%arg23, %arg27] [%105, 1] [1, 1] : tensor<32x16xf16> to tensor<?x1xf16>
-            %extracted_slice_21 = tensor.extract_slice %79[%arg27, %arg25] [1, %106] [1, 1] : tensor<16x64xf16> to tensor<1x?xf16>
-            %extracted_slice_22 = tensor.extract_slice %arg28[%arg23, %arg25] [%107, %108] [1, 1] : tensor<32x64xf32> to tensor<?x?xf32>
+            %subview_20 = memref.subview %alloc[%arg23, %arg27] [%105, 1] [1, 1] : memref<32x16xf16> to memref<?x1xf16, strided<[?, ?], offset: ?>>
+            %subview_21 = memref.subview %alloc_10[%arg27, %arg25] [1, %106] [1, 1] : memref<16x64xf16> to memref<1x?xf16, strided<[?, ?], offset: ?>>
+            %subview_22 = memref.subview %arg28[%arg23, %arg25] [%107, %108] [1, 1] : memref<32x64xf32> to memref<?x?xf32, strided<[?, ?], offset: ?>>
             %109 = vector.create_mask %105, %c1 : vector<[4]x1xi1>
-            %110 = vector.transfer_read %extracted_slice_20[%c0, %c0], %cst_0, %109 {in_bounds = [true, true, true], permutation_map = #map2} : tensor<?x1xf16>, vector<[4]x[4]x1xf16>
+            %110 = vector.transfer_read %subview_20[%c0, %c0], %cst_0, %109 {in_bounds = [true, true, true], permutation_map = #map2} : memref<?x1xf16, strided<[?, ?], offset: ?>>, vector<[4]x[4]x1xf16>
             %111 = vector.create_mask %106 : vector<[4]xi1>
             %112 = vector.insert %111, %cst [0] : vector<[4]xi1> into vector<1x[4]xi1>
-            %113 = vector.transfer_read %extracted_slice_21[%c0, %c0], %cst_0, %112 {in_bounds = [true, true, true], permutation_map = #map3} : tensor<1x?xf16>, vector<[4]x[4]x1xf16>
+            %113 = vector.transfer_read %subview_21[%c0, %c0], %cst_0, %112 {in_bounds = [true, true, true], permutation_map = #map3} : memref<1x?xf16, strided<[?, ?], offset: ?>>, vector<[4]x[4]x1xf16>
             %114 = vector.create_mask %105, %106 : vector<[4]x[4]xi1>
-            %115 = vector.transfer_read %extracted_slice_22[%c0, %c0], %cst_1, %114 {in_bounds = [true, true]} : tensor<?x?xf32>, vector<[4]x[4]xf32>
+            %115 = vector.transfer_read %subview_22[%c0, %c0], %cst_1, %114 {in_bounds = [true, true]} : memref<?x?xf32, strided<[?, ?], offset: ?>>, vector<[4]x[4]xf32>
             %116 = arith.extf %110 : vector<[4]x[4]x1xf16> to vector<[4]x[4]x1xf32>
             %117 = arith.extf %113 : vector<[4]x[4]x1xf16> to vector<[4]x[4]x1xf32>
             %118 = vector.create_mask %105, %106, %c1 : vector<[4]x[4]x1xi1>
             %119 = vector.mask %118 { vector.contract {indexing_maps = [#map4, #map4, #map5], iterator_types = ["parallel", "parallel", "reduction"], kind = #vector.kind<add>} %116, %117, %115 : vector<[4]x[4]x1xf32>, vector<[4]x[4]x1xf32> into vector<[4]x[4]xf32> } : vector<[4]x[4]x1xi1> -> vector<[4]x[4]xf32>
-            %120 = vector.transfer_write %119, %extracted_slice_22[%c0, %c0], %114 {in_bounds = [true, true]} : vector<[4]x[4]xf32>, tensor<?x?xf32>
-            %inserted_slice = tensor.insert_slice %120 into %arg28[%arg23, %arg25] [%107, %108] [1, 1] : tensor<?x?xf32> into tensor<32x64xf32>
-            scf.yield %inserted_slice : tensor<32x64xf32>
+            vector.transfer_write %119, %subview_22[%c0, %c0], %114 {in_bounds = [true, true]} : vector<[4]x[4]xf32>, memref<?x?xf32, strided<[?, ?], offset: ?>>
+            scf.yield %arg28 : memref<32x64xf32>
           }
-          scf.yield %104 : tensor<32x64xf32>
+          scf.yield %104 : memref<32x64xf32>
         }
-        scf.yield %103 : tensor<32x64xf32>
+        scf.yield %103 : memref<32x64xf32>
       }
-      %86 = linalg.generic {indexing_maps = [#map6, #map6, #map6], iterator_types = ["parallel", "parallel"]} ins(%85, %arg16 : tensor<32x64xf32>, tensor<32x64xf32>) outs(%85 : tensor<32x64xf32>) {
-      ^bb0(%in: f32, %in_20: f32, %out: f32):
-        %103 = arith.addf %in, %in_20 : f32
-        linalg.yield %103 : f32
-      } -> tensor<32x64xf32>
+      linalg.generic {indexing_maps = [#map6, #map6, #map6], iterator_types = ["parallel", "parallel"]} ins(%85, %arg16 : memref<32x64xf32>, memref<32x64xf32>) outs(%85 : memref<32x64xf32>) {
+        ^bb0(%in: f32, %in_20: f32, %out: f32):
+          %103 = arith.addf %in, %in_20 : f32
+          linalg.yield %103 : f32
+      }
       %87 = arith.addi %arg19, %c16 : index
       %88 = arith.remsi %87, %41 : index
       %89 = arith.muli %39, %41 : index
@@ -171,7 +170,7 @@ module {
       %reinterpret_cast_18 = memref.reinterpret_cast %arg1 to offset: [%96], sizes: [%c16, %101], strides: [%43, %c1] : memref<*xf16> to memref<16x?xf16, strided<[?, ?], offset: ?>>
       %102 = arith.subi %c64, %101 : index
       %reinterpret_cast_19 = memref.reinterpret_cast %arg1 to offset: [%98], sizes: [%c16, %102], strides: [%43, %c1] : memref<*xf16> to memref<16x?xf16, strided<[?, ?], offset: ?>>
-      scf.yield %86, %reinterpret_cast_16, %reinterpret_cast_18, %87, %95, %reinterpret_cast_17, %reinterpret_cast_19 : tensor<32x64xf32>, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>, index, index, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>
+      scf.yield %85, %reinterpret_cast_16, %reinterpret_cast_18, %87, %95, %reinterpret_cast_17, %reinterpret_cast_19 : memref<32x64xf32>, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>, index, index, memref<?x16xf16, strided<[?, ?], offset: ?>>, memref<16x?xf16, strided<[?, ?], offset: ?>>    
     }
     %47 = arith.index_cast %arg8 : i32 to index
     %48 = arith.index_cast %15 : i32 to index
@@ -179,12 +178,12 @@ module {
     %50 = arith.index_cast %16 : i32 to index
     %51 = arith.addi %49, %50 : index
     %reinterpret_cast_5 = memref.reinterpret_cast %arg2 to offset: [%51], sizes: [32, 64], strides: [%47, 1] : memref<*xf16> to memref<32x64xf16, strided<[?, 1], offset: ?>>
-    %52 = tensor.empty() : tensor<32x64xf16>
-    %53 = linalg.generic {indexing_maps = [#map6, #map6], iterator_types = ["parallel", "parallel"]} ins(%46#0 : tensor<32x64xf32>) outs(%52 : tensor<32x64xf16>) {
-    ^bb0(%in: f32, %out: f16):
-      %66 = arith.truncf %in : f32 to f16
-      linalg.yield %66 : f16
-    } -> tensor<32x64xf16>
+    %alloc_52 = memref.alloc() : memref<32x64xf16>
+    linalg.generic {indexing_maps = [#map6, #map6], iterator_types = ["parallel", "parallel"]} ins(%46#0 : memref<32x64xf32>) outs(%alloc_52 : memref<32x64xf16>) {
+      ^bb0(%in: f32, %out: f16):
+        %66 = arith.truncf %in : f32 to f16
+        linalg.yield %66 : f16
+    }
     %54 = arith.index_cast %15 : i32 to index
     %55 = arith.addi %54, %c32 : index
     %56 = arith.index_cast %arg3 : i32 to index
@@ -197,9 +196,8 @@ module {
     %63 = arith.subi %62, %59 : index
     %64 = arith.minsi %58, %c32 : index
     %65 = arith.minsi %63, %c64 : index
-    %extracted_slice = tensor.extract_slice %53[0, 0] [%64, %65] [1, 1] : tensor<32x64xf16> to tensor<?x?xf16>
     %subview = memref.subview %reinterpret_cast_5[0, 0] [%64, %65] [1, 1] : memref<32x64xf16, strided<[?, 1], offset: ?>> to memref<?x?xf16, strided<[?, 1], offset: ?>>
-    bufferization.materialize_in_destination %extracted_slice in writable %subview : (tensor<?x?xf16>, memref<?x?xf16, strided<[?, 1], offset: ?>>) -> ()
+    memref.copy %53, %subview : memref<32x64xf16> to memref<?x?xf16, strided<[?, 1], offset: ?>>
     return
   }
 }

@@ -17,7 +17,6 @@ module {
     %reinterpret_cast_2 = memref.reinterpret_cast %arg2 to offset: [0], sizes: [128, 256], strides: [%c256, 1] : memref<*xbf16> to memref<128x256xbf16, strided<[?, 1]>>
     %alloc_3 = memref.alloc() : memref<128x256xbf16>
     memref.copy %reinterpret_cast_2, %alloc_3 : memref<128x256xbf16, strided<[?, 1]>> to memref<128x256xbf16>
-    %3 = bufferization.to_tensor %alloc_3 restrict writable : memref<128x256xbf16>
     %4 = tensor.empty() : tensor<128x256xbf16>
     %5 = linalg.fill ins(%cst : bf16) outs(%4 : tensor<128x256xbf16>) -> tensor<128x256xbf16>
     %6 = linalg.matmul ins(%0, %transposed : tensor<128x64xbf16>, tensor<64x256xbf16>) outs(%5 : tensor<128x256xbf16>) -> tensor<128x256xbf16>

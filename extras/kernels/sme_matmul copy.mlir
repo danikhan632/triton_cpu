@@ -7,10 +7,10 @@
 // RUN:   -convert-arm-sme-to-llvm \
 // RUN:   -convert-vector-to-llvm=enable-arm-sve \
 // RUN:   -cse -canonicalize -test-lower-to-llvm | \
-// %mcr_aarch64_cmd \
-//-e=main -entry-point-result=void \
-//-march=aarch64 -mattr="+sve,+sme" \
-//-shared-libs=%mlir_runner_utils,%mlir_c_runner_utils,%arm_sme_abi_shlib | \
+; %mcr_aarch64_cmd \
+-e=main -entry-point-result=void \
+-march=aarch64 -mattr="+sve,+sme" \
+-shared-libs=%mlir_runner_utils,%mlir_c_runner_utils,%arm_sme_abi_shlib | \
 // RUN: FileCheck %s
 
 func.func @matmul(%A : tensor<?x?xf32>, %B : tensor<?x?xf32>, %C : tensor<?x?xf32>) {
@@ -74,13 +74,11 @@ module attributes {transform.with_named_sequence} {
 
     // Step 3: Bufferize ahead of TransferReadDropUnitDimsPattern, which
     // currently only supports memrefs.
+    %bufferize = transform.bufferization.one_shot_bufferize %module
+      {bufferize_function_boundaries=true} : (!transform.any_op) -> !transform.any_op
 
-    //; %func = transform.structured.match ops{["func.func"]} in %module: (!transform.any_op) -> !transform.any_op
-
-
-    %bufferize = transform.bufferization.one_shot_bufferize %module{bufferize_function_boundaries=true} : (!transform.any_op) -> !transform.any_op
-
-    %func = transform.structured.match ops{["func.func"]} in %bufferize: (!transform.any_op) -> !transform.any_op
+    %func = transform.structured.match ops{["func.func"]} in %bufferize
+      : (!transform.any_op) -> !transform.any_op
 
     // Step 4: Lower vector.multi_reduction to vector.contract (+ some helpful patterns).
     transform.apply_patterns to %func {
