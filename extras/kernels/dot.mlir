@@ -20,7 +20,6 @@ module {
     %4 = tensor.empty() : tensor<128x256xbf16>
     %5 = linalg.fill ins(%cst : bf16) outs(%4 : tensor<128x256xbf16>) -> tensor<128x256xbf16>
     %6 = linalg.matmul ins(%0, %transposed : tensor<128x64xbf16>, tensor<64x256xbf16>) outs(%5 : tensor<128x256xbf16>) -> tensor<128x256xbf16>
-    %7 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%6, %3 : tensor<128x256xbf16>, tensor<128x256xbf16>) outs(%6 : tensor<128x256xbf16>) {
     ^bb0(%in: bf16, %in_4: bf16, %out: bf16):
       %8 = arith.addf %in, %in_4 : bf16
       linalg.yield %8 : bf16

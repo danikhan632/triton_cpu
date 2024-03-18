@@ -54,18 +54,22 @@ def _optimize_ttsharedir(ttsharedir: str):
         return ttsharedir
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "ttshared.mlir")
+        dst_path2 = os.path.join(tmpdir, "ttsme2.mlir")
         dst_path = os.path.join(tmpdir, "ttsme.mlir")
         Path(src_path).write_text(ttsharedir)
         triton_shared_opt_path = _get_triton_SME_path()
-        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-conversion", "-o", dst_path])
-        output= Path(dst_path).read_text()
+        mlir_opt_path = _get_llvm_bin_path("mlir-opt")
+        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-conversion", "-o", dst_path2])
+        output= Path(dst_path2).read_text()
         printc(output)
+        subprocess.check_call([mlir_opt_path, dst_path2, "--one-shot-bufferize=allow-unknown-ops", "-o", dst_path])
+        output= Path(dst_path).read_text()
         # if "vector.contract" in output:
         #     raise Exception("SME conversion failed, vector.contract found in output")
         pre_outer =open("/home/green/code/triton-cpu/extras/kernels/pre_outer.mlir","r").read()
         # if output.strip() == pre_outer.strip():
         #     raise Exception("SME conversion failed, output is same as pre_outer.mlir")
-        output = pre_outer
+        # output = pre_outer
         return output
 
 def _ttsharedir_to_llir(ttsharedir: str):

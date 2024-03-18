@@ -115,6 +115,127 @@ namespace {
 //     }
 //   }
 // };
+//----------------------------------------------------------------------------------
+
+// // Helper function to create a MemRef type from a Tensor type.
+// static MemRefType convertTensorToMemRef(TensorType tensorType) {
+//   return MemRefType::get(tensorType.getShape(), tensorType.getElementType());
+// }
+
+// // Pattern to replace `linalg.fill` on tensors with `linalg.fill` on memrefs.
+// struct LinalgFillTensorToMemRefPattern : public OpRewritePattern<linalg::FillOp> {
+//   using OpRewritePattern<linalg::FillOp>::OpRewritePattern;
+
+//   LogicalResult matchAndRewrite(linalg::FillOp op, PatternRewriter &rewriter) const override {
+//     auto tensorType = op.output().getType().cast<TensorType>();
+//     auto memrefType = convertTensorToMemRef(tensorType);
+
+//     auto memref = rewriter.create<memref::AllocOp>(op.getLoc(), memrefType);
+//     rewriter.create<linalg::FillOp>(op.getLoc(), op.value(), memref);
+
+//     rewriter.replaceOp(op, memref.getResult());
+//     return success();
+//   }
+// };
+
+// // Pattern to replace `tensor.extract_slice` with `memref.subview`.
+// struct TensorExtractSliceToMemRefSubviewPattern : public OpRewritePattern<tensor::ExtractSliceOp> {
+//   using OpRewritePattern<tensor::ExtractSliceOp>::OpRewritePattern;
+
+//   LogicalResult matchAndRewrite(tensor::ExtractSliceOp op, PatternRewriter &rewriter) const override {
+//     auto sourceTensorType = op.getSource().getType().cast<TensorType>();
+//     auto sourceMemRefType = convertTensorToMemRef(sourceTensorType);
+
+//     auto sourceMemRef = rewriter.create<memref::CastOp>(op.getLoc(), sourceMemRefType, op.getSource());
+
+//     auto subview = rewriter.create<memref::SubViewOp>(op.getLoc(), sourceMemRef, op.getMixedOffsets(), op.getMixedSizes(), op.getMixedStrides());
+
+//     rewriter.replaceOp(op, subview.getResult());
+//     return success();
+//   }
+// };
+
+// // Pattern to replace `bufferization.to_tensor` with a `memref.cast`.
+// struct BufferizationToTensorToMemRefCastPattern : public OpRewritePattern<bufferization::ToTensorOp> {
+//   using OpRewritePattern<bufferization::ToTensorOp>::OpRewritePattern;
+
+//   LogicalResult matchAndRewrite(bufferization::ToTensorOp op, PatternRewriter &rewriter) const override {
+//     auto memrefType = op.getMemref().getType().cast<MemRefType>();
+//     auto tensorType = op.getType().cast<TensorType>();
+
+//     if (memrefType.getShape() != tensorType.getShape() || memrefType.getElementType() != tensorType.getElementType()) {
+//       return failure();
+//     }
+
+//     rewriter.replaceOpWithNewOp<memref::CastOp>(op, memrefType, op.getMemref());
+//     return success();
+//   }
+// };
+
+// // Pass to replace and lower bufferization and tensor uses.
+// struct ReplaceBufferizationTensorPass : public PassWrapper<ReplaceBufferizationTensorPass, OperationPass<ModuleOp>> {
+//   void runOnOperation() override {
+//     MLIRContext *context = &getContext();
+//     RewritePatternSet patterns(context);
+
+//     // Add patterns.
+//     patterns.add<LinalgFillTensorToMemRefPattern,
+//                  TensorExtractSliceToMemRefSubviewPattern,
+//                  BufferizationToTensorToMemRefCastPattern>(context);
+
+//     if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+//       signalPassFailure();
+//     }
+//   }
+// };
+
+//----------------------------------------------------------------------------------
+
+struct LinalgFillTensorToMemrefPattern : public OpRewritePattern<linalg::FillOp> {
+  using OpRewritePattern<linalg::FillOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::FillOp op, PatternRewriter &rewriter) const override {
+
+    if (!op.output().getType().isa<TensorType>()) {
+      return failure();
+    }
+
+    // Get the tensor type and extract its shape.
+    auto tensorType = op.output().getType().cast<TensorType>();
+    auto shape = tensorType.getShape();
+
+    // Create a memref type with the same shape and element type as the tensor.
+    auto memrefType = MemRefType::get(shape, tensorType.getElementType());
+
+    // Allocate a memref with the same shape as the tensor.
+    auto memref = rewriter.create<memref::AllocOp>(op.getLoc(), memrefType);
+
+    // Replace linalg.fill on tensors with an equivalent operation on memrefs.
+    rewriter.create<linalg::FillOp>(op.getLoc(), op.value(), memref.getResult());
+
+
+    // Replace the uses of the tensor with the memref.
+    rewriter.replaceOp(op, memref.getResult());
+
+    return success();
+  }
+};
+
+
+
+struct LinalgFillTensorToMemrefPass
+    : public PassWrapper<LinalgFillTensorToMemrefPass, OperationPass<ModuleOp>> {
+  void runOnOperation() override {
+    MLIRContext *context = &getContext();
+    RewritePatternSet patterns(context);
+    
+    patterns.add<LinalgFillTensorToMemrefPattern>(context);
+    
+    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+      signalPassFailure();
+    getOperation()->dump();
+  }
+};
 
 //----------------------------------------------------------------------------------
 
@@ -188,8 +309,7 @@ struct LoopUnrollPass
     RewritePatternSet patterns(context);
     patterns.add<LoopUnrollPattern>(context);
 
-    if (failed(
-            applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
 };
@@ -328,19 +448,21 @@ private:
   bool enableSME;
 };
 
-std::unique_ptr<Pass> createOuterProductVectorizationPass() {
-  return std::make_unique<OuterProductVectorizationPass>();
-}
-std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
-  return std::make_unique<MatmulTileConversionPass>(enableSME);
-}
-// std::unique_ptr<Pass> createPrefetchPass() {
-//   return std::make_unique<PrefetchPass>();
-// }
-std::unique_ptr<Pass> createLoopUnrollPass() {
-  return std::make_unique<LoopUnrollPass>();
-}
-
+  std::unique_ptr<Pass> createOuterProductVectorizationPass() {
+    return std::make_unique<OuterProductVectorizationPass>();
+  }
+  std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
+    return std::make_unique<MatmulTileConversionPass>(enableSME);
+  }
+  // std::unique_ptr<Pass> createPrefetchPass() {
+  //   return std::make_unique<PrefetchPass>();
+  // }
+  std::unique_ptr<Pass> createLoopUnrollPass() {
+    return std::make_unique<LoopUnrollPass>();
+  }
+  // std::unique_ptr<Pass> createFillPass() {
+  //   return std::make_unique<ReplaceBufferizationTensorPass>();
+  // }
 } // namespace
 
 int main(int argc, char **argv) {
@@ -365,6 +487,9 @@ int main(int argc, char **argv) {
       [](OpPassManager &pm) {
         pm.addPass(createMatmulTileConversionPass(true));    
         pm.addPass(createOuterProductVectorizationPass());
+        pm.addPass(mlir::tensor::createTensorBufferizePass());
+
+          
         // pm.addPass(createLinalgBufferizePass());
         //pm.addPass(mlir::tensor::createTensorBufferizePass());
       });
@@ -374,8 +499,9 @@ int main(int argc, char **argv) {
       "Converts linalg.matmul to a more optimized form using SME",
       [](OpPassManager &pm) {
         pm.addPass(createMatmulTileConversionPass(false));
-        pm.addPass(createLinalgBufferizePass());
+        
         pm.addPass(createOuterProductVectorizationPass());
+        pm.addPass(createLinalgBufferizePass());
         // pm.addPass(createLoopUnrollPass());
       });
 
