@@ -1,5 +1,5 @@
 from triton.backends.compiler import BaseBackend
-from triton._C.libtriton import ir, passes, llvm, triton_shared
+from triton._C.libtriton import ir, passes
 from dataclasses import dataclass
 from typing import Any
 import hashlib
@@ -10,23 +10,11 @@ import subprocess
 import functools
 from pathlib import Path
 
-def printc(obj, color="cyan"): #makes things easier to see, will remove later
-    color_code = {
-        "black": "30", "red": "31", "green": "32", "yellow": "33",
-        "blue": "34", "magenta": "35", "cyan": "36", "white": "37"
-    }
-    colored_text = f"\033[{color_code[color]}m{obj}\033[0m" if color in color_code else obj
-    print(colored_text)
-
 def _get_triton_shared_opt_path() -> str:
     path = os.getenv("TRITON_SHARED_OPT_PATH", "")
     if path == "":
         raise Exception("TRITON_SHARED_OPT_PATH is not set.")
     return path
-
-
-def _get_triton_SME_path() -> str:
-    return os.getenv("TRITON_SME_PATH", "")
 
 
 def _get_llvm_bin_path(bin_name: str) -> str:
@@ -44,33 +32,14 @@ def _ttir_to_ttsharedir(mod):
         dst_path = os.path.join(tmpdir, "ttshared.mlir")
         Path(src_path).write_text(ttir_code)
         triton_shared_opt_path = _get_triton_shared_opt_path()
-        subprocess.check_call([triton_shared_opt_path, src_path, "--triton-to-linalg", "-o", dst_path])
+        subprocess.check_call([triton_shared_opt_path, src_path, "--triton-to-structured", "--canonicalize", "--triton-arith-to-linalg", "--cse", "--structured-to-memref", "-o", dst_path])
         return Path(dst_path).read_text()
 
 
 def _optimize_ttsharedir(ttsharedir: str):
+    # We don't apply any optimizations now, but we can add passes if needed.
+    return ttsharedir
 
-    if  _get_triton_SME_path() == "":
-        return ttsharedir
-    with tempfile.TemporaryDirectory() as tmpdir:
-        src_path = os.path.join(tmpdir, "ttshared.mlir")
-        dst_path2 = os.path.join(tmpdir, "ttsme2.mlir")
-        dst_path = os.path.join(tmpdir, "ttsme.mlir")
-        Path(src_path).write_text(ttsharedir)
-        triton_shared_opt_path = _get_triton_SME_path()
-        mlir_opt_path = _get_llvm_bin_path("mlir-opt")
-        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-conversion", "-o", dst_path2])
-        output= Path(dst_path2).read_text()
-        printc(output)
-        subprocess.check_call([mlir_opt_path, dst_path2, "--one-shot-bufferize=allow-unknown-ops", "-o", dst_path])
-        output= Path(dst_path).read_text()
-        # if "vector.contract" in output:
-        #     raise Exception("SME conversion failed, vector.contract found in output")
-        pre_outer =open("/home/green/code/triton-cpu/extras/kernels/pre_outer.mlir","r").read()
-        # if output.strip() == pre_outer.strip():
-        #     raise Exception("SME conversion failed, output is same as pre_outer.mlir")
-        # output = pre_outer
-        return output
 
 def _ttsharedir_to_llir(ttsharedir: str):
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -79,33 +48,22 @@ def _ttsharedir_to_llir(ttsharedir: str):
         llir_path = os.path.join(tmpdir, "ll.ir")
         Path(ttshared_path).write_text(ttsharedir)
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
-        
         # TritonShared-MLIR to LLVM-MLIR
-        subprocess.check_call([
-            mlir_opt_path,
-            ttshared_path,
-
+        subprocess.check_call([mlir_opt_path, ttshared_path,
             "--convert-linalg-to-affine-loops",
-            "--allow-unregistered-dialect",
             "--eliminate-empty-tensors",
-            "--convert-cf-to-llvm",
-            "--arm-sve-legalize-vector-storage",
-            "--allocate-arm-sme-tiles",
             "--empty-tensor-to-alloc-tensor",
             "--one-shot-bufferize=allow-return-allocs-from-loops=true",
             "--lower-affine",
             "--convert-linalg-to-loops",
-            "--convert-arm-sme-to-scf",
             "--convert-scf-to-cf",
             "--convert-cf-to-llvm",
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
-            "--convert-vector-to-arm-sme",
-            "--convert-arm-sme-to-llvm",
+            "--convert-vector-to-llvm",
             "--convert-index-to-llvm",
             "--memref-expand",
-            "-convert-vector-to-llvm=enable-arm-sve",
             "--expand-strided-metadata",
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
@@ -114,12 +72,10 @@ def _ttsharedir_to_llir(ttsharedir: str):
             # so we have to run these two passes again here.
             "--lower-affine",
             "--convert-arith-to-llvm",
-            "--convert-cf-to-llvm",
             # Remove all unrealized casts created
-            "--canonicalize",
+            "--reconcile-unrealized-casts",
             "-o",
-            llmlir_path,
-        ])
+            llmlir_path])
 
         # LLVM-MLIR to LLVM-IR
         mlir_translate_path = _get_llvm_bin_path("mlir-translate")
@@ -128,7 +84,6 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "-o",
             llir_path])
         return Path(llir_path).read_text()
-
 
 
 def _optimize_llir(llir: str):
@@ -175,17 +130,17 @@ class CPUOptions:
 
 
 class CPUBackend(BaseBackend):
+    binary_ext = 'cpuasm'
+
     @staticmethod
-    def supports_target(target: tuple):
-        return target[0] == 'cpu'
+    def supports_target(target: str):
+        return target == 'cpu'
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target, tuple) and len(target) == 2
-        assert isinstance(target[1], str)
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target[1]}
+        args = {'arch': self.target}
         args.update({k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts})
         return CPUOptions(**args)
 
@@ -196,7 +151,6 @@ class CPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
-        # assert False
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -218,4 +172,4 @@ class CPUBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        return f'{1}-{self.target}'
+        return self.target

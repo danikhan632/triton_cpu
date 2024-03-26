@@ -51,13 +51,10 @@ def test():
     )
     ret = triton.compile(
         src,
-        # First value must be "cpu" while the second can be anything
-        target=("cpu", "0")
+        target="cpu"
     )
     print(ret.asm["ttir"])
     print(ret.asm["ttsharedir"])
     print(ret.asm["llir"])
     print(ret.asm["cpuasm"])
     print('Pass')
-
-test()

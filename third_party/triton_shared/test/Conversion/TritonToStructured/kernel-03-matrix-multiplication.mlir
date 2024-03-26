@@ -31,40 +31,40 @@ module {
     %16 = arith.divsi %15, %12 : i32
     %17 = arith.muli %14, %c128_i32 : i32
     %18 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-    %19 = tt.splat %17 : (i32) -> tensor<128xi32>
+    %19 = tt.splat %17 : i32 -> tensor<128xi32>
     %20 = arith.addi %19, %18 : tensor<128xi32>
     %21 = arith.muli %16, %c256_i32 : i32
     %22 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
-    %23 = tt.splat %21 : (i32) -> tensor<256xi32>
+    %23 = tt.splat %21 : i32 -> tensor<256xi32>
     %24 = arith.addi %23, %22 : tensor<256xi32>
     %25 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
-    %26 = tt.expand_dims %20 {axis = 1 : i32} : (tensor<128xi32>) -> tensor<128x1xi32>
-    %27 = tt.splat %arg6 : (i32) -> tensor<128x1xi32>
+    %26 = tt.expand_dims %20 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+    %27 = tt.splat %arg6 : i32 -> tensor<128x1xi32>
     %28 = arith.muli %26, %27 : tensor<128x1xi32>
-    %29 = tt.expand_dims %25 {axis = 0 : i32} : (tensor<64xi32>) -> tensor<1x64xi32>
-    %30 = tt.splat %arg7 : (i32) -> tensor<1x64xi32>
+    %29 = tt.expand_dims %25 {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+    %30 = tt.splat %arg7 : i32 -> tensor<1x64xi32>
     %31 = arith.muli %29, %30 : tensor<1x64xi32>
-    %32 = tt.broadcast %28 : (tensor<128x1xi32>) -> tensor<128x64xi32>
-    %33 = tt.broadcast %31 : (tensor<1x64xi32>) -> tensor<128x64xi32>
+    %32 = tt.broadcast %28 : tensor<128x1xi32> -> tensor<128x64xi32>
+    %33 = tt.broadcast %31 : tensor<1x64xi32> -> tensor<128x64xi32>
     %34 = arith.addi %32, %33 : tensor<128x64xi32>
-    %35 = tt.splat %arg0 : (!tt.ptr<bf16>) -> tensor<128x64x!tt.ptr<bf16>>
+    %35 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<128x64x!tt.ptr<bf16>>
     %36 = tt.addptr %35, %34 : tensor<128x64x!tt.ptr<bf16>>, tensor<128x64xi32>
-    %37 = tt.expand_dims %25 {axis = 1 : i32} : (tensor<64xi32>) -> tensor<64x1xi32>
-    %38 = tt.splat %arg8 : (i32) -> tensor<64x1xi32>
+    %37 = tt.expand_dims %25 {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
+    %38 = tt.splat %arg8 : i32 -> tensor<64x1xi32>
     %39 = arith.muli %37, %38 : tensor<64x1xi32>
-    %40 = tt.expand_dims %24 {axis = 0 : i32} : (tensor<256xi32>) -> tensor<1x256xi32>
-    %41 = tt.splat %arg9 : (i32) -> tensor<1x256xi32>
+    %40 = tt.expand_dims %24 {axis = 0 : i32} : tensor<256xi32> -> tensor<1x256xi32>
+    %41 = tt.splat %arg9 : i32 -> tensor<1x256xi32>
     %42 = arith.muli %40, %41 : tensor<1x256xi32>
-    %43 = tt.broadcast %39 : (tensor<64x1xi32>) -> tensor<64x256xi32>
-    %44 = tt.broadcast %42 : (tensor<1x256xi32>) -> tensor<64x256xi32>
+    %43 = tt.broadcast %39 : tensor<64x1xi32> -> tensor<64x256xi32>
+    %44 = tt.broadcast %42 : tensor<1x256xi32> -> tensor<64x256xi32>
     %45 = arith.addi %43, %44 : tensor<64x256xi32>
-    %46 = tt.splat %arg1 : (!tt.ptr<bf16>) -> tensor<64x256x!tt.ptr<bf16>>
+    %46 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<64x256x!tt.ptr<bf16>>
     %47 = tt.addptr %46, %45 : tensor<64x256x!tt.ptr<bf16>>, tensor<64x256xi32>
-    %48 = tt.splat %cst : (f32) -> tensor<128x256xf32>
+    %48 = tt.splat %cst : f32 -> tensor<128x256xf32>
     %49 = arith.muli %arg7, %c64_i32 : i32
-    %50 = tt.splat %49 : (i32) -> tensor<128x64xi32>
+    %50 = tt.splat %49 : i32 -> tensor<128x64xi32>
     %51 = arith.muli %arg8, %c64_i32 : i32
-    %52 = tt.splat %51 : (i32) -> tensor<64x256xi32>
+    %52 = tt.splat %51 : i32 -> tensor<64x256xi32>
     %53:3 = scf.for %arg12 = %c0_i32 to %6 step %c1_i32 iter_args(%arg13 = %48, %arg14 = %36, %arg15 = %47) -> (tensor<128x256xf32>, tensor<128x64x!tt.ptr<bf16>>, tensor<64x256x!tt.ptr<bf16>>)  : i32 {
       %71 = tt.load %arg14 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x64xbf16>
       %72 = tt.load %arg15 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x256xbf16>
@@ -75,21 +75,21 @@ module {
       scf.yield %74, %75, %76 : tensor<128x256xf32>, tensor<128x64x!tt.ptr<bf16>>, tensor<64x256x!tt.ptr<bf16>>
     }
     %54 = arith.truncf %53#0 : tensor<128x256xf32> to tensor<128x256xbf16>
-    %55 = tt.splat %arg10 : (i32) -> tensor<128x1xi32>
+    %55 = tt.splat %arg10 : i32 -> tensor<128x1xi32>
     %56 = arith.muli %55, %26 : tensor<128x1xi32>
-    %57 = tt.splat %arg2 : (!tt.ptr<bf16>) -> tensor<128x1x!tt.ptr<bf16>>
+    %57 = tt.splat %arg2 : !tt.ptr<bf16> -> tensor<128x1x!tt.ptr<bf16>>
     %58 = tt.addptr %57, %56 : tensor<128x1x!tt.ptr<bf16>>, tensor<128x1xi32>
-    %59 = tt.splat %arg11 : (i32) -> tensor<1x256xi32>
+    %59 = tt.splat %arg11 : i32 -> tensor<1x256xi32>
     %60 = arith.muli %59, %40 : tensor<1x256xi32>
-    %61 = tt.broadcast %58 : (tensor<128x1x!tt.ptr<bf16>>) -> tensor<128x256x!tt.ptr<bf16>>
-    %62 = tt.broadcast %60 : (tensor<1x256xi32>) -> tensor<128x256xi32>
+    %61 = tt.broadcast %58 : tensor<128x1x!tt.ptr<bf16>> -> tensor<128x256x!tt.ptr<bf16>>
+    %62 = tt.broadcast %60 : tensor<1x256xi32> -> tensor<128x256xi32>
     %63 = tt.addptr %61, %62 : tensor<128x256x!tt.ptr<bf16>>, tensor<128x256xi32>
-    %64 = tt.splat %arg3 : (i32) -> tensor<128x1xi32>
+    %64 = tt.splat %arg3 : i32 -> tensor<128x1xi32>
     %65 = arith.cmpi slt, %26, %64 : tensor<128x1xi32>
-    %66 = tt.splat %arg4 : (i32) -> tensor<1x256xi32>
+    %66 = tt.splat %arg4 : i32 -> tensor<1x256xi32>
     %67 = arith.cmpi slt, %40, %66 : tensor<1x256xi32>
-    %68 = tt.broadcast %65 : (tensor<128x1xi1>) -> tensor<128x256xi1>
-    %69 = tt.broadcast %67 : (tensor<1x256xi1>) -> tensor<128x256xi1>
+    %68 = tt.broadcast %65 : tensor<128x1xi1> -> tensor<128x256xi1>
+    %69 = tt.broadcast %67 : tensor<1x256xi1> -> tensor<128x256xi1>
     %70 = arith.andi %68, %69 : tensor<128x256xi1>
     tt.store %63, %54, %70 {cache = 1 : i32, evict = 1 : i32} : tensor<128x256xbf16>
     tt.return
@@ -156,8 +156,8 @@ module {
 // CHECK-DAG:         [[VAR_52_:%.+]] = tts.make_tptr [[PARAM_1_]] to sizes: [64, 256], strides: {{.}}[[VAR_26_]], [[VAR_27_]]{{.}}, offsets: {{.}}[[PARAM_1_]]5, [[VAR_28_]]{{.}}, shape: [0, 0], order: [] : <bf16, 1> to tensor<64x256x!tt.ptr<bf16, 1>>
 // CHECK-DAG:         [[VAR_53_:%.+]] = tts.make_tptr [[PARAM_0_]] to sizes: [128, 64], strides: {{.}}[[VAR_23_]], [[VAR_25_]]{{.}}, offsets: {{.}}[[VAR_arg14_]], [[CST_0_]]{{.}}, shape: [0, 0], order: [] : <bf16, 1> to tensor<128x64x!tt.ptr<bf16, 1>>
 // CHECK-NOT: separator of consecutive DAGs
-// CHECK-DAG:         [[VAR_54_:%.+]] = "tts.load"([[VAR_53_]]) <{operandSegmentSizes = array<i32: 1, 0, 0>, static_dims = array<i64>}> : (tensor<128x64x!tt.ptr<bf16, 1>>) -> tensor<128x64xbf16>
-// CHECK-DAG:         [[VAR_55_:%.+]] = "tts.load"([[VAR_52_]]) <{operandSegmentSizes = array<i32: 1, 0, 0>, static_dims = array<i64>}> : (tensor<64x256x!tt.ptr<bf16, 1>>) -> tensor<64x256xbf16>
+// CHECK-DAG:         [[VAR_54_:%.+]] = "tts.load"([[VAR_53_]]) <{operandSegmentSizes = array<i32: 1, 0, 0>, static_mask_dims = array<i64>}> : (tensor<128x64x!tt.ptr<bf16, 1>>) -> tensor<128x64xbf16>
+// CHECK-DAG:         [[VAR_55_:%.+]] = "tts.load"([[VAR_52_]]) <{operandSegmentSizes = array<i32: 1, 0, 0>, static_mask_dims = array<i64>}> : (tensor<64x256x!tt.ptr<bf16, 1>>) -> tensor<64x256xbf16>
 // CHECK:             [[VAR_56_:%.+]] = tt.dot [[VAR_54_]], [[VAR_55_]], [[VAR_cst_]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x64xbf16> * tensor<64x256xbf16> -> tensor<128x256xf32>
 // CHECK-DAG:         [[VAR_57_:%.+]] = arith.addf [[VAR_arg13_]], [[VAR_56_]] : tensor<128x256xf32>
 // CHECK-DAG:         [[VAR_58_:%.+]] = arith.addi [[VAR_arg14_]], [[VAR_30_]] : index
@@ -185,6 +185,6 @@ module {
 // CHECK-DAG:       [[VAR_49_:%.+]] = arith.subi [[VAR_48_]], [[VAR_45_]] : index
 // CHECK-DAG:       [[VAR_50_:%.+]] = arith.minsi [[VAR_44_]], [[CST_128_]] : index
 // CHECK:           [[VAR_51_:%.+]] = arith.minsi [[VAR_49_]], [[CST_256_]] : index
-// CHECK:           "tts.store"([[VAR_39_]], [[VAR_34_]], [[VAR_50_]], [[VAR_51_]]) <{static_dims = array<i64: -9223372036854775808, -9223372036854775808>}> : (tensor<128x256x!tt.ptr<bf16, 1>>, tensor<128x256xbf16>, index, index) -> ()
+// CHECK:           "tts.store"([[VAR_39_]], [[VAR_34_]], [[VAR_50_]], [[VAR_51_]]) <{static_mask_dims = array<i64: -9223372036854775808, -9223372036854775808>}> : (tensor<128x256x!tt.ptr<bf16, 1>>, tensor<128x256xbf16>, index, index) -> ()
 // CHECK:           tt.return
 // CHECK:         }

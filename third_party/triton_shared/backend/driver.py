@@ -2,7 +2,7 @@ import hashlib
 import tempfile
 import sysconfig
 
-import os, subprocess, tempfile, platform
+import os, subprocess, tempfile
 import importlib.util
 import sysconfig
 
@@ -12,28 +12,10 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 
 
-def has_hf():
-  resp = os.popen("lscpu").read()
-  if platform.machine() == "x86_64" and "f16c" in resp:
-    return True
-  elif platform.machine() == "aarch64" and "fphp" in resp:
-    return True
-  return False
-
-def has_bf():
-  resp = os.popen("lscpu").read()
-  if platform.machine() == "x86_64" and "avx512_bf16" in resp:
-    return True
-  #TODO add aarch64 support for bf16
-  return False
-
-
-
 # -------------------- Launcher ----------------------------
 def _ty_to_cpp(ty):
     if ty[0] == '*':
         return "void*"
-      
     return {
         "i1": "int32_t",
         "i8": "int8_t",
@@ -42,14 +24,12 @@ def _ty_to_cpp(ty):
         "i64": "int64_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "float16_t" if has_hf() else "float",
-        "bf16": "bfloat16_t" if has_bf() else "float16_t" if has_hf() else "float",
+        "fp16": "float",
+        "bf16": "float",
         "fp32": "float",
         "f32": "float",
         "fp64": "double",
     }[ty]
-    
-    
 
 def _extracted_ty(ty):
     if ty[0] == '*':
@@ -60,15 +40,15 @@ def _extracted_ty(ty):
         'i64': 'int64_t',
         'u32': 'uint32_t',
         'u64': 'uint64_t',
-        "fp16": "float16_t" if has_hf() else "float",
-        "bf16": "bfloat16_t" if has_bf() else "float16_t" if has_hf() else "float",
+        'fp16': 'float',
+        'bf16': 'float',
         'fp32': 'float',
         'f32': 'float',
         'fp64': 'double',
     }[ty]
 
 def _format_of(ty):
-    format_dict = {
+    return {
         "PyObject*": "O",
         "float": "f",
         "double": "d",
@@ -77,13 +57,8 @@ def _format_of(ty):
         "int32_t": "i",
         "uint64_t": "K",
         "int64_t": "L",
-    }
-    if has_bf():
-        format_dict["bfloat16"] = "e"
-    if has_hf():
-        format_dict["float16"] = "h"
-    return format_dict[ty]
-  
+    }[ty]
+
 def _generate_launcher(constants, signature, kernel_name):
     arg_decls = ', '.join(f"{_ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
     format = "iiiOOO" + ''.join([_format_of(_extracted_ty(ty)) for ty in signature.values()])
@@ -91,7 +66,6 @@ def _generate_launcher(constants, signature, kernel_name):
 #include <assert.h>
 #include <stdbool.h>
 #include <Python.h>
-
 #include "ExecutionEngine/CRunnerUtils.h"
 #include "ExecutionEngine/CRunnerUtils.cpp"
 
@@ -250,21 +224,13 @@ def compile_module(launcher_src, kernel_placeholder_name):
               Path(asm_src_path).write_bytes(asm_src)
               Path(launcher_src_path).write_text(src)
               # Compile it together.
-              if os.environ.get("SME_EMULATOR", False):
-                subprocess.check_call([
-                  "g++-13","-std=c++23","-march=aarch64", launcher_src_path, asm_src_path,
-                  f"-I{py_include_dir}", f"-I{include_dir}", "-mattr=+sve,+sme",
-                  "-shared", "-fPIC", "-o", so_path
-                ])
-              else:
-                subprocess.check_call([
-                  "g++-13", "-std=c++23",launcher_src_path, asm_src_path,
-                  f"-I{py_include_dir}", f"-I{include_dir}",
-                  "-shared", "-fPIC", "-o", so_path
-                ])
+              subprocess.check_call([
+                "g++", launcher_src_path, asm_src_path,
+                f"-I{py_include_dir}", f"-I{include_dir}",
+                "-shared", "-fPIC", "-o", so_path
+              ])
 
               with open(so_path, "rb") as f:
-
                 cache_path = cache.put(f.read(), filename, binary=True)
 
         # Load and launch the compiled kernel.
@@ -361,7 +327,7 @@ class CPUDriver(DriverBase):
         return
 
     def get_current_target(self):
-        return ("cpu", "0")
+        return "cpu"
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         return args

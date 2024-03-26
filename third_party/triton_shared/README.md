@@ -11,12 +11,11 @@ The basic intended architecture looks like this:
 The middle-layer uses MLIR's Linalg and Tensor Dialects for operations on Triton block values. Operations on Triton pointers use the Memref Dialect.
 
 ## Motivation
-[This talk at the 2023 Triton Developer Conferene](https://www.youtube.com/watch?v=y2V3ucS1pfQ) gives some backgorund on the project and its goals.
+[This talk at the 2023 Triton Developer Conferene](https://www.youtube.com/watch?v=y2V3ucS1pfQ) gives some background on the project and its goals.
 
 ## Usage
 
-This repo now includes `triton` as a submodule and builds as an out-of-tree backend. 
-The submodule currently points to [this](https://github.com/openai/triton/pull/3007) branch which hasn't been merged yet, but we will change the commit to point to `main` once everything finalizes.
+This repo now includes `triton` as a submodule and builds as an out-of-tree backend.
 
 To build this repo clone `triton-shared` to a folder called `triton_shared` (notice the **underscore**).
 `Triton` will use this folder name to create a module under `triton.runtime` for the reference CPU backend.
@@ -27,7 +26,7 @@ You need to set the `TRITON_PLUGINS_DIRS` environment variable to the location o
 export TRITON_PLUGIN_DIRS=$(pwd)/triton_shared
 
 git clone --recurse-submodules https://github.com/microsoft/triton-shared.git triton_shared
-cd triton_shared/triton
+cd triton_shared/triton/python
 ```
 
 To build with Clang:
