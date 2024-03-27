@@ -10,12 +10,23 @@ import subprocess
 import functools
 from pathlib import Path
 
+def printc(obj, color="cyan"): #makes things easier to see, will remove later
+    color_code = {
+        "black": "30", "red": "31", "green": "32", "yellow": "33",
+        "blue": "34", "magenta": "35", "cyan": "36", "white": "37"
+    }
+    colored_text = f"\033[{color_code[color]}m{obj}\033[0m" if color in color_code else obj
+    print(colored_text)
+
+
 def _get_triton_shared_opt_path() -> str:
     path = os.getenv("TRITON_SHARED_OPT_PATH", "")
     if path == "":
         raise Exception("TRITON_SHARED_OPT_PATH is not set.")
     return path
 
+def _get_triton_SME_path() -> str:
+    return os.getenv("TRITON_SME_PATH", "")
 
 def _get_llvm_bin_path(bin_name: str) -> str:
     path = os.getenv("LLVM_BINARY_DIR", "")
@@ -32,13 +43,39 @@ def _ttir_to_ttsharedir(mod):
         dst_path = os.path.join(tmpdir, "ttshared.mlir")
         Path(src_path).write_text(ttir_code)
         triton_shared_opt_path = _get_triton_shared_opt_path()
-        subprocess.check_call([triton_shared_opt_path, src_path, "--triton-to-structured", "--canonicalize", "--triton-arith-to-linalg", "--cse", "--structured-to-memref", "-o", dst_path])
-        return Path(dst_path).read_text()
+        subprocess.check_call([triton_shared_opt_path, src_path,  "--triton-to-structured", "--canonicalize", "--triton-arith-to-linalg", "--cse", "--structured-to-memref", "-o", dst_path])
+        val = Path(dst_path).read_text()
+        printc(val, "green")
+        return val
 
 
 def _optimize_ttsharedir(ttsharedir: str):
-    # We don't apply any optimizations now, but we can add passes if needed.
-    return ttsharedir
+
+    if  _get_triton_SME_path() == "":
+        return ttsharedir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = os.path.join(tmpdir, "ttshared.mlir")
+        dst_path_1 = os.path.join(tmpdir, "ttsme_1.mlir")
+        dst_path_2 = os.path.join(tmpdir, "ttsme_2.mlir")
+        Path(src_path).write_text(ttsharedir)
+        triton_shared_opt_path = _get_triton_SME_path()
+        mlir_opt_path = _get_llvm_bin_path("mlir-opt")
+        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-conversion" , "-o", dst_path_1])
+        output_1= Path(dst_path_1).read_text()
+        printc(output_1)
+        subprocess.check_call([triton_shared_opt_path, dst_path_1, "-sve-conversion", "-o", dst_path_2 , ])
+        output_2= Path(dst_path_2).read_text()
+        printc(output_2,"red")
+        output= output_2
+        # subprocess.check_call([mlir_opt_path, dst_path2, "--one-shot-bufferize=allow-unknown-ops", "-o", dst_path])
+        # output= Path(dst_path).read_text()
+        # if "vector.contract" in output:
+        #     raise Exception("SME conversion failed, vector.contract found in output")
+        pre_outer =open("/home/green/code/triton-cpu/extras/kernels/pre_outer.mlir","r").read()
+        # if output.strip() == pre_outer.strip():
+        #     raise Exception("SME conversion failed, output is same as pre_outer.mlir")
+        # output = pre_outer
+        return output
 
 
 def _ttsharedir_to_llir(ttsharedir: str):

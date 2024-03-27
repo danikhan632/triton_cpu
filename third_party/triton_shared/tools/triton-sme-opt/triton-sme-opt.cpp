@@ -5,6 +5,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
+
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Interfaces/VectorInterfaces.h"
@@ -20,250 +21,169 @@
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/Transforms/Passes.h"
-#include "mlir/Dialect/Bufferization/Transforms/Passes.h"  // from @llvm-project
-#include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"  // from @llvm-project
+#include "mlir/Dialect/Bufferization/Transforms/Passes.h"
+#include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"
 #include "mlir/Dialect/Linalg/TransformOps/LinalgTransformOps.h"
 #include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
 #include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"
 #include "mlir/Dialect/Bufferization/IR/BufferizableOpInterface.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Pass/Pass.h"
+
 using namespace mlir;
+
 constexpr int64_t MAX_LOOPS = 64;
 
 namespace {
+struct OuterProductVectorizationPass;
 
-// struct OneShotBufferizePass : public PassWrapper<OneShotBufferizePass, OperationPass<ModuleOp>> {
-//   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(OneShotBufferizePass)
 
-//   void getDependentDialects(DialectRegistry &registry) const override {
-//     registry.insert<bufferization::BufferizationDialect>();
-//   }
 
-//   void runOnOperation() override {
-//     ModuleOp moduleOp = getOperation();
-//     MLIRContext *context = &getContext();
+struct MatmulTileConversion : public OpRewritePattern<linalg::MatmulOp> {
+  explicit MatmulTileConversion(MLIRContext *context, bool enableSME)
+      : OpRewritePattern<linalg::MatmulOp>(context), enableSME(enableSME) {}
 
-//     // Set up OneShotBufferizationOptions.
-//     bufferization::OneShotBufferizationOptions options;
+  LogicalResult matchAndRewrite(linalg::MatmulOp op,
+                                PatternRewriter &rewriter) const override {
+    linalg::LinalgTilingOptions tilingOptions;
 
-//     options.bufferizeFunctionBoundaries = true;
-//     // options.createDeallocs = true;
+    tilingOptions.setTileSizeComputationFunction(
+        [&](OpBuilder &b, Operation *) {
+          SmallVector<Value, 4> sizes;
+          sizes.reserve(3);
 
-//     // Run One-Shot Bufferize.
-//     if (failed(bufferization::runOneShotBufferize(moduleOp, options))) {
-//       //fails here
-//       return signalPassFailure();
-//     }
+          Location loc = op.getLoc();
+          Value vscale = b.create<vector::VectorScaleOp>(loc, b.getIndexType());
 
-//   }
-// };
+          if (enableSME) {
+            Value tileM = b.create<arith::ConstantIndexOp>(loc, 4);
+            Value tileMScaled = b.create<arith::MulIOp>(loc, tileM, vscale);
+            sizes.push_back(tileMScaled);
+          } else {
+            Value tileM = b.create<arith::ConstantIndexOp>(loc, 2);
+            sizes.push_back(tileM);
+          }
+          Value tileN = b.create<arith::ConstantIndexOp>(loc, 4);
+          Value tileNScaled = b.create<arith::MulIOp>(loc, tileN, vscale);
+          sizes.push_back(tileNScaled);
+          Value tileK = b.create<arith::ConstantIndexOp>(loc, 1);
+          sizes.push_back(tileK);
 
-struct CustomBufferizationPass : public PassWrapper<CustomBufferizationPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CustomBufferizationPass)
+          return sizes;
+        });
+    std::cout << enableSME << std::endl;
+
+    auto tiledOpResult = tileLinalgOp(rewriter, op, tilingOptions);
+    if (failed(tiledOpResult)) {
+      std::cout << "TILING FAILED" << std::endl;
+      return failure();
+    }
+
+    SmallVector<int64_t, 4> inputVectorSizes = {enableSME ? 4 : 2, 4, 1};
+    SmallVector<bool, 4> inputScalableVecDims = {enableSME, true, false};
+
+    if (failed(linalg::vectorize(
+            rewriter, cast<linalg::LinalgOp>(tiledOpResult->op.getOperation()),
+            inputVectorSizes, inputScalableVecDims))) {
+      std::cout << "Vectorization FAILED" << std::endl;
+      return failure();
+    }
+
+    MLIRContext *context = getContext();
+    rewriter.replaceOp(op, tiledOpResult->tensorResults);
+
+    return success();
+  }
+
+private:
+  bool enableSME;
+};
+
+struct MatmulTileConversionPass
+    : public PassWrapper<MatmulTileConversionPass,
+                          OperationPass<func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MatmulTileConversionPass)
+
+  StringRef getArgument() const final {
+    return "matmul-tile-conversion";
+  }
+  StringRef getDescription() const final {
+    return "Matmul tile conversion pass";
+  }
+  explicit MatmulTileConversionPass(bool enableSME) : enableSME(enableSME) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<bufferization::BufferizationDialect>();
+    registry.insert<linalg::LinalgDialect, func::FuncDialect, scf::SCFDialect,
+                    vector::VectorDialect>();
   }
 
   void runOnOperation() override {
-    ModuleOp moduleOp = getOperation();
+    func::FuncOp funcOp = getOperation();
     MLIRContext *context = &getContext();
 
-    // Pre-processing step to handle bufferization.to_tensor operations.
-    SmallVector<bufferization::ToTensorOp> toTensorOps;
-    moduleOp.walk([&](bufferization::ToTensorOp op) {
-      toTensorOps.push_back(op);
-    });
+    RewritePatternSet patterns(context);
+    patterns.add<MatmulTileConversion>(context, enableSME);
 
-    for (bufferization::ToTensorOp op : toTensorOps) {
-      OpBuilder builder(op);
-      Location loc = op.getLoc();
+    ConversionTarget target(*context);
+    target.addLegalDialect<linalg::LinalgDialect, func::FuncDialect,
+                           vector::VectorDialect, affine::AffineDialect,
+                           scf::SCFDialect>();
 
-      // Get the memref operand of the bufferization.to_tensor operation.
-      Value memref = op.getMemref();
-
-      // Print debugging information about the bufferization.to_tensor operation.
-      llvm::errs() << "bufferization.to_tensor operation: " << op << "\n";
-      llvm::errs() << "Memref operand: " << memref << "\n";
-      llvm::errs() << "Memref type: " << memref.getType() << "\n";
-      llvm::errs() << "Result type: " << op.getResult().getType() << "\n";
-
-      // Get the tensor type from the result of the bufferization.to_tensor operation.
-      Type tensorType = op.getResult().getType();
-
-      // Create a new bufferization.to_tensor operation with the tensor type.
-      Value newTensor = builder.create<bufferization::ToTensorOp>(loc, tensorType, memref);
-
-      // Replace all uses of the original bufferization.to_tensor operation with the new tensor.
-      op.getResult().replaceAllUsesWith(newTensor);
-
-      // Erase the original bufferization.to_tensor operation.
-      op.erase();
+    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+      signalPassFailure();
     }
+  }
 
-    // Set up OneShotBufferizationOptions.
-    bufferization::OneShotBufferizationOptions options;
-    options.bufferizeFunctionBoundaries = true;
-    // options.createDeallocs = true;
+private:
+  bool enableSME;
+};
 
-    // Run One-Shot Bufferize.
-    if (failed(bufferization::runOneShotBufferize(moduleOp, options))) {
+struct OuterProductVectorizationPass
+    : public PassWrapper<OuterProductVectorizationPass,
+                          OperationPass<func::FuncOp>> {
+  StringRef getArgument() const final {
+    return "outer-product-vectorization";
+  }
+  StringRef getDescription() const final {
+    return "Outer product vectorization pass";
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<vector::VectorDialect, func::FuncDialect>();
+  }
+
+  void runOnOperation() override {
+    func::FuncOp funcOp = getOperation();
+    MLIRContext *context = funcOp.getContext();
+    RewritePatternSet patterns(context);
+    ConversionTarget target(*context);
+
+    vector::populateVectorMaskLoweringPatternsForSideEffectingOps(patterns);
+    vector::populateVectorReductionToContractPatterns(patterns);
+    vector::populateVectorMaskOpLoweringPatterns(patterns);
+    vector::populateVectorTransferDropUnitDimsPatterns(patterns);
+    vector::VectorTransformsOptions vectorTransformOptions;
+
+    vectorTransformOptions.setVectorTransformsOptions(vector::VectorContractLowering::OuterProduct);
+    vector::populateVectorContractLoweringPatterns(patterns, vectorTransformOptions);
+
+    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
       return signalPassFailure();
     }
   }
 };
-  struct OuterProductVectorizationPass
-      : public PassWrapper<OuterProductVectorizationPass,
-                          OperationPass<func::FuncOp>> {
-    void getDependentDialects(DialectRegistry &registry) const override {
-      registry.insert<vector::VectorDialect, func::FuncDialect>();
-    }
 
-    void runOnOperation() override {
-      func::FuncOp funcOp = getOperation();
-      MLIRContext *context = funcOp.getContext();
-      RewritePatternSet patterns(context);
-      ConversionTarget target(*context);
-
-      vector::populateVectorMaskLoweringPatternsForSideEffectingOps(patterns);
-
-      vector::populateVectorReductionToContractPatterns(patterns);
-
-      vector::populateVectorReductionToContractPatterns(patterns);
-
-      vector::populateVectorMaskOpLoweringPatterns(patterns);
-      vector::populateVectorTransferDropUnitDimsPatterns(patterns);
-      vector::VectorTransformsOptions vectorTransformOptions;
-
-      vectorTransformOptions.setVectorTransformsOptions(vector::VectorContractLowering::OuterProduct);
-      vector::populateVectorContractLoweringPatterns(patterns, vectorTransformOptions);
-
-      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
-        return signalPassFailure();
-      }
-
-    }
-
-  };
-
-
-
-
-
-  struct MatmulTileConversion : public OpRewritePattern<linalg::MatmulOp> {
-    explicit MatmulTileConversion(MLIRContext *context, bool enableSME)
-        : OpRewritePattern<linalg::MatmulOp>(context), enableSME(enableSME) {}
-
-    LogicalResult matchAndRewrite(linalg::MatmulOp op,
-                                  PatternRewriter &rewriter) const override {
-      linalg::LinalgTilingOptions tilingOptions;
-
-      tilingOptions.setTileSizeComputationFunction(
-          [&](OpBuilder &b, Operation *) {
-            SmallVector<mlir::Value, 4> sizes;
-            sizes.reserve(3);
-
-            Location loc = op.getLoc();
-            Value vscale = b.create<vector::VectorScaleOp>(loc, b.getIndexType());
-
-            if (enableSME) {
-              Value tileM = b.create<arith::ConstantIndexOp>(loc, 4);
-              Value tileMScaled = b.create<arith::MulIOp>(loc, tileM, vscale);
-              sizes.push_back(tileMScaled);
-            } else {
-              Value tileM = b.create<arith::ConstantIndexOp>(loc, 2);
-              sizes.push_back(tileM);
-            }
-            Value tileN = b.create<arith::ConstantIndexOp>(loc, 4);
-            Value tileNScaled = b.create<arith::MulIOp>(loc, tileN, vscale);
-            sizes.push_back(tileNScaled);
-            Value tileK = b.create<arith::ConstantIndexOp>(loc, 1);
-            sizes.push_back(tileK);
-
-            return sizes;
-          });
-      std::cout << enableSME << std::endl;
-
-      auto tiledOpResult = tileLinalgOp(rewriter, op, tilingOptions);
-      if (failed(tiledOpResult)) {
-        std::cout << "TILING FAILED" << std::endl;
-        return failure();
-      }
-
-      SmallVector<int64_t, 4> inputVectorSizes = {enableSME ? 4 : 2, 4, 1};
-      SmallVector<bool, 4> inputScalableVecDims = {enableSME, true, false};
-
-      if (failed(linalg::vectorize(
-              rewriter, cast<linalg::LinalgOp>(tiledOpResult->op.getOperation()),
-              inputVectorSizes, inputScalableVecDims))) {
-        std::cout << "Vectorization FAILED" << std::endl;
-        return failure();
-      }
-
-      MLIRContext *context = getContext();
-      rewriter.replaceOp(op, tiledOpResult->tensorResults);
-
-      return success();
-    }
-
-  private:
-    bool enableSME;
-  };
-
-
-
-  class MatmulTileConversionPass
-      : public PassWrapper<MatmulTileConversionPass,
-                          OperationPass<func::FuncOp>> {
-  public:
-    explicit MatmulTileConversionPass(bool enableSME) : enableSME(enableSME) {}
-
-  public:
-    void getDependentDialects(DialectRegistry &registry) const override {
-      registry.insert<linalg::LinalgDialect, func::FuncDialect, scf::SCFDialect,
-                      vector::VectorDialect>();
-    }
-
-    void runOnOperation() override {
-      func::FuncOp funcOp = getOperation();
-      MLIRContext *context = &getContext();
-
-      RewritePatternSet patterns(context);
-      patterns.add<MatmulTileConversion>(context, enableSME);
-
-      ConversionTarget target(*context);
-      target.addLegalDialect<linalg::LinalgDialect, func::FuncDialect,
-                            vector::VectorDialect, affine::AffineDialect,
-                            scf::SCFDialect>();
-
-      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
-        signalPassFailure();
-      }
-    }
-
-  private:
-    bool enableSME;
-  };
-
-  std::unique_ptr<Pass> createOuterProductVectorizationPass() {
-    return std::make_unique<OuterProductVectorizationPass>();
-  }
-
-
-  std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
-    return std::make_unique<MatmulTileConversionPass>(enableSME);
-  }
-
-std::unique_ptr<Pass> createOneShotBufferizePass() {
-  // return std::make_unique<OneShotBufferizePass>();
-  return std::make_unique<CustomBufferizationPass>();
+std::unique_ptr<Pass> createOuterProductVectorizationPass() {
+  return std::make_unique<OuterProductVectorizationPass>();
 }
 
-} 
+std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
+  return std::make_unique<MatmulTileConversionPass>(enableSME);
+}
+
+} // namespace
 
 int main(int argc, char **argv) {
-  mlir::DialectRegistry registry;
+  DialectRegistry registry;
 
   registry.insert<func::FuncDialect, arith::ArithDialect, math::MathDialect,
                   linalg::LinalgDialect, affine::AffineDialect, scf::SCFDialect,
@@ -282,26 +202,10 @@ int main(int argc, char **argv) {
       "sme-conversion",
       "Converts linalg.matmul to a more optimized form using SME",
       [](OpPassManager &pm) {
-        pm.addPass(createMatmulTileConversionPass(true));    
+        pm.addPass(createMatmulTileConversionPass(true));
         pm.addPass(createOuterProductVectorizationPass());
-        pm.addPass(mlir::tensor::createTensorBufferizePass());
-        pm.addPass(createOneShotBufferizePass());
-       
-
-      });
-
-  PassPipelineRegistration<> sveConversionPipeline(
-      "sve-conversion",
-      "Converts linalg.matmul to a more optimized form using SME",
-      [](OpPassManager &pm) {
-        // pm.addPass(createMatmulTileConversionPass(false));
-        // pm.addPass(createOuterProductVectorizationPass());
-        // pm.addPass(createLinalgBufferizePass());
-        pm.addPass(createOneShotBufferizePass());
-
       });
 
   return asMainReturnCode(
       MlirOptMain(argc, argv, "Optimizer Driver\n", registry));
 }
-
