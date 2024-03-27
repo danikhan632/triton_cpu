@@ -1,67 +1,32 @@
 #include "Utility.h"
-#include "TypeConverter.h"
-#include "TritonGPUToLLVMBase.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
-#if USE_ROCM
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#endif
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
+
+namespace {
+enum class ShflKind : uint32_t {
+  bfly = 0,
+  up = 1,
+  down = 2,
+  idx = 3,
+};
+}
 
 namespace mlir {
 
 namespace LLVM {
 using namespace mlir::triton;
 
-
-namespace AMD{
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred) {
-#if USE_ROCM
-  store(val, ptr);
-  return val;
-#else
-  MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
-  const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
-
-  PTXBuilder builder;
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto *valOpr = builder.newOperand(val, c);
-  auto &st = builder.create<>("st")->shared().b(bits);
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, void_ty(ctx));
-#endif
-}
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred) {
-#if USE_ROCM
-  return load(elemTy, ptr);
-#else
-  MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
-  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
-
-  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
-
-  PTXBuilder builder;
-  auto *dOpr = builder.newOperand(c);
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
-  ld(dOpr, ptrOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, elemTy);
-#endif
-}
-
-static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, Value i, int strideInt, NVVM::ShflKind mode,
-                            Value clamp) {
+namespace AMD {
+static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i, int strideInt, ShflKind mode,
+                           Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
-#ifdef USE_ROCM
-  //On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on 32bit/dwords
-  //so we need promote to 32 here.
+  // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
+  // 32bit/dwords so we need promote to 32 here.
   auto valType = val.getType();
   if (!valType.isInteger(32) && bits <= 32) {
     if (!valType.isIntOrIndex())
@@ -69,7 +34,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     if (bits < 32)
       val = sext(i32_ty, val);
 
-    val = commonShflSync(loc, rewriter, val, i, strideInt, mode, clamp);
+    val = shuffleCommon(loc, rewriter, val, i, strideInt, mode, clamp);
 
     if (bits < 32)
       val = trunc(int_ty(bits), val);
@@ -77,24 +42,23 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       val = bitcast(val, valType);
     return val;
   }
-#endif
 
   if (bits == 64) {
     Type vecTy = vec_ty(f32_ty, 2);
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, strideInt, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, strideInt, mode, clamp);
+    val0 = shuffleCommon(loc, rewriter, val0, i, strideInt, mode, clamp);
+    val1 = shuffleCommon(loc, rewriter, val1, i, strideInt, mode, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
     return bitcast(vec, val.getType());
   }
 
-#ifdef USE_ROCM
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Value threadId = rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  Value threadId =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, threadId);
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpSize = i32_val(iWarpSize);
@@ -107,9 +71,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     return rewriter.create<ROCDL::DsBpermuteOp>(loc, valType, permuteAddr, val);
   };
 
-
   switch (mode) {
-  case NVVM::ShflKind::bfly:
+  case ShflKind::bfly:
     if (strideInt > 16) {
       Value threadId =
           rewriter
@@ -130,64 +93,56 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
     }
     break;
-  case NVVM::ShflKind::up: {
+  case ShflKind::up: {
     Value mask = icmp_slt(laneId, i);
     Value delta = sub(laneId, i);
     Value index = select(mask, laneId, delta);
     return bpermute(index);
   }
-  case NVVM::ShflKind::idx:
+  case ShflKind::idx:
     return bpermute(i);
   default:
     assert(false && "Unsupported ShflKind");
     break;
   }
   return Value();
-
-#else
-
-  Type type = val.getType();
-  if (type != i32_ty) {
-    val = bitcast(val, int_ty(bits));
-    if (bits < 32)
-      val = zext(i32_ty, val);
-  }
-  Value mask = i32_val(0xFFFFFFFF);
-  Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
-                                               mode, UnitAttr());
-  if (type != i32_ty) {
-    if (bits < 32)
-      result = trunc(int_ty(bits), result);
-    result = bitcast(result, type);
-  }
-  return result;
-
-#endif
 }
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::bfly,
-                        i32_val(0x1f));
-}
-
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
-		  i32_val(0x0));
+  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::bfly,
+                       i32_val(0x1f));
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i) {
-  return shflIdxSync(loc, rewriter, val, i32_val(i));
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i) {
+  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::up,
+                       i32_val(0x0));
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i) {
-  return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
-                        i32_val(0x1f));
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return shuffleIdx(loc, rewriter, val, i32_val(i));
 }
+
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i) {
+  return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, i32_val(0x1f));
 }
+
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
+               ModuleOp moduleOp, int axis) {
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
+  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+}
+
+} // namespace AMD
 
 } // namespace LLVM
 } // namespace mlir

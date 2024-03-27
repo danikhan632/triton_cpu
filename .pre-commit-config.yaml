@@ -31,7 +31,7 @@ repos:
           )
 
   - repo: https://github.com/google/yapf
-    rev: 6a92535967543aa979461fbe2da63a9b6f7dd595
+    rev: be72557
     hooks:
       - id: yapf
         args: ["-p", "-i"]
@@ -43,14 +43,10 @@ repos:
     hooks:
       - id: clang-format
         stages: [commit, push, manual]
-        exclude: |
-          (?x)(
-            ^include/triton/external/|
-            ^third_party/
-          )
 
 exclude: |
   (?x)(
     ^include/triton/external/|
-    ^third_party/
+    ^third_party/amd/|
+    ^third_party/nvidia/backend/include/cuda.h
   )

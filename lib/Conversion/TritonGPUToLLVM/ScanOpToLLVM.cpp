@@ -1,15 +1,14 @@
-#include "PatternTritonGPUOpToLLVM.h"
 #include "ReduceScanCommon.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::shflIdxSync;
-using ::mlir::LLVM::shflUpSync;
-using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 // apply combine region to acc and cur and accumulate it into acc
@@ -71,6 +70,7 @@ scanThreadContiguousElements(SmallVector<SmallVector<Value>> &srcValues,
 // contiguous group of elements.
 static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
                      ConversionPatternRewriter &rewriter,
+                     const TargetInfoBase &targetInfo,
                      ScanLoweringHelper &helper, Value laneIdAxis) {
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
@@ -87,7 +87,7 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
     for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned j = 0; j < acc.size(); ++j) {
-        shfl[j] = shflUpSync(loc, rewriter, acc[j], i * threadStride);
+        shfl[j] = targetInfo.shuffleUp(loc, rewriter, acc[j], i * threadStride);
       }
       SmallVector<Value> tempAcc =
           accumulate(rewriter, helper.getCombineOp(), shfl, acc);
@@ -111,7 +111,8 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
                                  ScanLoweringHelper &helper, Value laneId,
                                  Value warpId, SmallVector<Value> smemBases,
                                  SmallVector<Type> smemTypes,
-                                 Value parallelLaneId) {
+                                 Value parallelLaneId,
+                                 const TargetInfoBase &targetInfo) {
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
@@ -119,6 +120,7 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
   unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   unsigned chunkId = 0;
   unsigned elementStride = helper.getAxisElementStride();
+
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -128,11 +130,10 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
     Value mask = icmp_eq(laneId, i32_val(scanDim - 1));
     Value index = add(parallelLaneId, mul(warpId, i32_val(numParallelLane)));
     index = add(index, i32_val(chunkId * numParallelLane * axisNumWarps));
-
     for (unsigned i = 0; i < lastElement.size(); ++i) {
       Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), smemTypes[i],
                            smemBases[i], index);
-      storeShared(rewriter, loc, writePtr, lastElement[i], mask);
+      targetInfo.storeShared(rewriter, loc, writePtr, lastElement[i], mask);
     }
     chunkId++;
   }
@@ -145,6 +146,7 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
 // reduced value from the previous lane.
 static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
                              ConversionPatternRewriter &rewriter,
+                             const TargetInfoBase &targetInfo,
                              ScanLoweringHelper &helper,
                              SmallVector<Value> smemBases,
                              SmallVector<Type> smemTypes, Value warpId,
@@ -226,7 +228,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
     // Update the rest of the contiguous elements.
     SmallVector<Value> lastElement(helper.getNumOperands());
     for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-      auto elem = shflUpSync(loc, rewriter, temp[i], threadStride);
+      auto elem = targetInfo.shuffleUp(loc, rewriter, temp[i], threadStride);
       lastElement[i] = select(maskFirstLane, accumulator.maskedAcc[i], elem);
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
@@ -253,6 +255,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
 
 static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
                                     ConversionPatternRewriter &rewriter,
+                                    const TargetInfoBase &targetInfo,
                                     ScanLoweringHelper &helper, Value warpId,
                                     Value laneIdAxis, Value laneIdLast) {
   Location loc = helper.getLoc();
@@ -297,14 +300,16 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
     auto lastElement = srcValues[srcIndex];
     if (scanDim > 1) {
       for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-        lastElement[i] =
-            shflUpSync(loc, rewriter, srcValues[srcIndex][i], threadStride);
+        lastElement[i] = targetInfo.shuffleUp(
+            loc, rewriter, srcValues[srcIndex][i], threadStride);
         lastElement[i] = select(maskFirstLane, accumulator[i], lastElement[i]);
         if (numScanBlocks > 1)
           // Update accumulator with the value from the last lane.
-          accumulator[i] =
-              shflIdxSync(loc, rewriter, srcValues[srcIndex][i], laneIdLast);
+          accumulator[i] = targetInfo.shuffleIdx(
+              loc, rewriter, srcValues[srcIndex][i], laneIdLast);
       }
+    } else if (numScanBlocks > 1) {
+      accumulator = srcValues[srcIndex];
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       auto laneValue = srcValues[srcIndex - i * elementStride];
@@ -333,6 +338,12 @@ struct ScanOpConversion
 public:
   using ConvertTritonGPUReduceScanToLLVMPattern<
       triton::ScanOp>::ConvertTritonGPUReduceScanToLLVMPattern;
+  explicit ScanOpConversion(LLVMTypeConverter &typeConverter,
+                            const TargetInfoBase &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp>(typeConverter,
+                                                                benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
@@ -343,6 +354,7 @@ public:
   }
 
 private:
+  const TargetInfoBase &targetInfo;
   SmallVector<Value> getMultiDimLaneId(ConversionPatternRewriter &rewriter,
                                        ScanLoweringHelper &helper,
                                        Value laneId) const;
@@ -439,6 +451,27 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   return srcValues;
 }
 
+// Flip the srcValues. Both reverses the chunks and reverses the lanes.
+// Lane reversal is done with a butterfly shuffle flip (divide and flip).
+SmallVector<SmallVector<Value>>
+flipSrcValues(Location loc, triton::ScanOp op,
+              ConversionPatternRewriter &rewriter,
+              const TargetInfoBase &targetInfo,
+              SmallVector<SmallVector<Value>> srcValues, int iWarpSize) {
+  SmallVector<SmallVector<Value>> values(srcValues.size());
+  for (int i = 0; i < srcValues.size(); ++i) {
+    int revIndex = srcValues.size() - i - 1;
+    for (unsigned j = 0; j < op.getNumOperands(); ++j) {
+      for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
+        srcValues[revIndex][j] =
+            targetInfo.shuffleXor(loc, rewriter, srcValues[revIndex][j], k);
+      }
+      values[i].push_back(srcValues[revIndex][j]);
+    }
+  }
+  return values;
+}
+
 // Lowering using warp shuffle operations to do warp level scan.
 LogicalResult
 ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
@@ -462,11 +495,24 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto srcValues =
       unpackInputs(loc, op, adaptor, rewriter, *getTypeConverter());
 
+  // For the reverse option we apply flip(scan(flip()) in
+  // order to avoid having a separate code path in the reverse direction.
+  // We do this by 1) reversing chunks, 2) reversing lanes, 3) reversing
+  // warp ids and then undoing this below.
+  // (Note: Tried pretty hard to get shflDownSync to work but I ended up
+  // having to add a lot of the complex cross warp code (if rev switch
+  // first/last etc). Reverse first seems more maintainable.)
+  if (op.getReverse()) {
+    warpIdAxis = sub(i32_val(axisNumWarps - 1), warpIdAxis);
+    srcValues =
+        flipSrcValues(loc, op, rewriter, targetInfo, srcValues, iWarpSize);
+  }
+
   // Scan contiguous elements in a thread and update `srcValues`.
   scanThreadContiguousElements(srcValues, rewriter, helper);
   // Apply warp level scan to the last element of each chunk of contiguous
   // elements.
-  warpScan(srcValues, rewriter, helper, laneIdAxis);
+  warpScan(srcValues, rewriter, targetInfo, helper, laneIdAxis);
 
   if (axisNumWarps > 1) {
     // Slow path for the case where there are multiple warps with unique data on
@@ -480,13 +526,13 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
     // Store the partial reducing for each warp into shared memory.
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
-                         smemBases, smemTypes, flatIdParallel);
+                         smemBases, smemTypes, flatIdParallel, targetInfo);
     barrier();
     // Read back the partial reduction of each warp and accumulate them based on
     // warpId. Then update each chunk of contiguous elements by adding the
     // accumulated value from the previous lane.
-    AddPartialReduce(srcValues, rewriter, helper, smemBases, smemTypes,
-                     warpIdAxis, laneIdAxis, flatIdParallel);
+    AddPartialReduce(srcValues, rewriter, targetInfo, helper, smemBases,
+                     smemTypes, warpIdAxis, laneIdAxis, flatIdParallel);
   } else if (srcValues.size() > 1) {
     // Fast path for the case where there is only one warp with unique data on
     // the axis.
@@ -496,8 +542,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(helper.getEncoding());
     auto laneIdLast = linearize(rewriter, loc, multiDimLaneId, threadsPerWarp,
                                 triton::gpu::getOrder(helper.getEncoding()));
-    AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis, laneIdAxis,
-                            laneIdLast);
+    AddPartialReduceOneWarp(srcValues, rewriter, targetInfo, helper, warpIdAxis,
+                            laneIdAxis, laneIdLast);
   } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
 
   auto transpose = [](const SmallVector<SmallVector<Value>> &v) {
@@ -513,6 +559,11 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   };
 
   SmallVector<Value> results(op.getNumOperands());
+  if (op.getReverse()) {
+    srcValues =
+        flipSrcValues(loc, op, rewriter, targetInfo, srcValues, iWarpSize);
+  }
+
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>();
@@ -525,7 +576,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 } // namespace
 
 void mlir::triton::populateScanOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  patterns.add<ScanOpConversion>(typeConverter, benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<ScanOpConversion>(typeConverter, targetInfo, benefit);
 }

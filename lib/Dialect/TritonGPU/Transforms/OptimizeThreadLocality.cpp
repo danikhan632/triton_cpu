@@ -38,7 +38,7 @@ struct OptimizeReshapeLayoutPattern
     }
     if (!reductionAxis)
       return failure();
-    auto tensorType = viewOp.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType tensorType = viewOp.getType();
     if (auto blocked = tensorType.getEncoding()
                            .dyn_cast<triton::gpu::BlockedEncodingAttr>()) {
       // If the layout already has all the elements along the reduction
@@ -148,8 +148,9 @@ class TritonGPUOptimizeThreadLocalityPass
       reduceOps.insert(reduce);
     });
 
+    IRRewriter builder(&getContext());
     for (auto reduce : reduceOps) {
-      OpBuilder builder(reduce);
+      builder.setInsertionPoint(reduce);
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
       auto srcShape = srcType.getShape();
       auto srcEncoding = srcType.getEncoding();

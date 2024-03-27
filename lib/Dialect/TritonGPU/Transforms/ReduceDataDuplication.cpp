@@ -31,7 +31,7 @@ public:
     ModuleOp mod = getOperation();
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcEncoding = srcType.getEncoding();
       if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
@@ -43,22 +43,33 @@ public:
       if (auto srcMmaEncoding =
               srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>()) {
 
-        if (srcMmaEncoding.getVersionMajor() == 1 ||
+        if (srcMmaEncoding.getVersionMajor() != 2 ||
             (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
              dstDotOp.getParent() == srcMmaEncoding))
           return;
       }
-      auto tmpType = RankedTensorType::get(
+      auto srcOrder = triton::gpu::getOrder(srcEncoding);
+      auto rank = srcOrder.size();
+      SmallVector<unsigned> sharedOrder;
+      if (rank == 3) {
+        // add all elements except the element that is zero
+        for (unsigned i = 0; i < rank; ++i)
+          if (srcOrder[i] != 0)
+            sharedOrder.emplace_back(srcOrder[i]);
+        sharedOrder.emplace_back(0);
+      } else {
+        sharedOrder = srcOrder;
+      }
+      auto tmpType = triton::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
-              mod.getContext(), dstDotOp, srcType.getShape(),
-              triton::gpu::getOrder(srcEncoding),
+              mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
               triton::gpu::getCTALayout(srcEncoding),
               srcType.getElementType()));
-      auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-          cvtOp.getLoc(), tmpType, cvtOp.getOperand());
-      auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-          cvtOp.getLoc(), dstType, tmp);
+      auto tmp = builder.create<triton::gpu::LocalAllocOp>(
+          cvtOp.getLoc(), tmpType, cvtOp.getSrc());
+      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),
+                                                                 dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
     });

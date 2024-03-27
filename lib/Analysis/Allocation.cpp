@@ -4,6 +4,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Alias.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -11,6 +12,7 @@
 #include <limits>
 #include <numeric>
 
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
@@ -19,7 +21,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -55,8 +56,8 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
 }
 
 SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -102,57 +103,54 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto repShape = getRepShapeForCvtLayout(op);
   if (repShape.empty())
     return repShape;
-
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+  auto rank = repShape.size();
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  if (srcLayout.isa<MfmaEncodingAttr>() &&
-      srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
+  if (srcLayout.isa<AMDMfmaEncodingAttr>() &&
+      srcLayout.dyn_cast<AMDMfmaEncodingAttr>().getIsTransposed() &&
       dstLayout.isa<DotOperandEncodingAttr>())
     if (isMfmaToDotShortcut(srcTy, dstTy))
       return {};
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  auto srcContigPerThread =
-      getUniqueContigPerThread(srcLayout, srcTy.getShape());
-  auto dstContigPerThread =
-      getUniqueContigPerThread(dstLayout, dstTy.getShape());
+  unsigned srcContigPerThread =
+      getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
+  unsigned dstContigPerThread =
+      getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
+  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  //       that we cannot do vectorization.
+  unsigned innerDim = rank - 1;
+  inVec = outOrd[0] != innerDim  ? 1
+          : inOrd[0] != innerDim ? 1
+                                 : srcContigPerThread;
+  outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
-  // We're going to do two shared memory operations:
-  //
-  //  - write from src into scratch (vectorized according to inVec)
-  //  - read from scratch into dst (vectorized according to outVec)
-  //
-  // scratch has the same layout as dst, so the reads (outVec) can be vectorized
-  // if we have N consecutive elements in dst/scratch.
-  //
-  // But writes to scratch (inVec) can be vectorized only if we have N
-  // consecutive elements in src *and* those elements go into N consecutive
-  // elements in scratch.
-  //
-  // TODO(jlebar): This is suboptimal if repShape[in/outOrd[0]] is small.  We
-  // might be able to merge the few most-minor dimensions and get a larger
-  // vector.
-  inVec = std::min(srcContigPerThread[inOrd[0]], dstContigPerThread[inOrd[0]]);
-  outVec = dstContigPerThread[outOrd[0]];
+  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
+  // codegen.
+  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    if (mma.getVersionMajor() == 1) {
+      inVec = srcContigPerThread;
+    } else if (dstLayout.isa<BlockedEncodingAttr>()) {
+      // when storing from mma layout and loading in blocked layout vectorizing
+      // the load back gives better performance even if there is a
+      // transposition.
+      outVec = dstContigPerThread;
+    }
+  }
 
-  if (repShape.size() <= 1)
+  if (rank <= 1)
     return repShape;
-  unsigned paddedDim = 1;
+  // pad the last dimension
+  unsigned paddedDim = rank - 1;
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
   unsigned pad = std::max(inVec, outVec);
   repShape[paddedDim] += pad;
   return repShape;
-}
-
-SmallVector<unsigned>
-getScratchConfigForStoreAsync(triton::nvidia_gpu::StoreAsyncTMAOp op) {
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
 }
 
 // TODO: extend beyond scalars
@@ -205,19 +203,19 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op) || maybeAliasOp(op))
+    if (!maybeSharedAllocationOp(op))
       return;
 
     // XXX(Keren): Why this hard-coded alignment?
     size_t kAlignment = 8;
     for (Value result : op->getResults()) {
-      if (triton::gpu::hasSharedEncoding(result)) {
+      if (auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>()) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
-        auto tensorType = result.getType().dyn_cast<RankedTensorType>();
-        auto shapePerCTA = triton::gpu::getShapePerCTA(tensorType);
+        auto allocType = alloc.getType();
+        auto shapePerCTA = triton::gpu::getShapePerCTA(allocType);
         auto bytes = product<int64_t>(shapePerCTA) *
-                     tensorType.getElementTypeBitWidth() / 8;
+                     allocType.getElementTypeBitWidth() / 8;
 
         // XXX(Keren): magic numbers 256 and 1024
         // benzh@maybe alignment should be passed in.
@@ -229,13 +227,6 @@ private:
         allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
                                                              kAlignment);
       }
-    }
-    if (isa<triton::nvidia_gpu::AllocMBarrierOp>(op)) {
-      Value result = op->getResult(0);
-      if (!result.getType().isa<RankedTensorType>())
-        // In case AllocMBarrierOp is allocating scalar mbarriers
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(result, 8,
-                                                             kAlignment);
     }
   }
 
@@ -266,7 +257,7 @@ private:
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
     } else if (auto histogram = dyn_cast<triton::HistogramOp>(op)) {
-      auto dstTy = histogram.getResult().getType().cast<RankedTensorType>();
+      auto dstTy = histogram.getType();
       int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
           op->getParentOfType<ModuleOp>());
       auto bytes = std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
@@ -274,8 +265,8 @@ private:
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
-      auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
+      auto srcTy = cvtLayout.getSrc().getType();
+      auto dstTy = cvtLayout.getType();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
       if (srcEncoding.isa<SharedEncodingAttr>() ||
@@ -298,18 +289,6 @@ private:
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
-    } else if (auto storeAsyncOp =
-                   dyn_cast<triton::nvidia_gpu::StoreAsyncTMAOp>(op)) {
-      auto srcTy = storeAsyncOp.getSrc().getType().cast<RankedTensorType>();
-      auto srcEncoding = srcTy.getEncoding();
-      if (!srcEncoding.isa<NvidiaMmaEncodingAttr>()) {
-        return;
-      }
-      auto smemShape = getScratchConfigForStoreAsync(storeAsyncOp);
-      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
-      auto bytes = elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes, 1024);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
@@ -473,13 +452,6 @@ private:
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
-      // TODO(Keren): Investigate mbarrier and figure out how to clean this up
-      // Shared memory allocated by mbarrier cannot be reused
-      if (value.getDefiningOp() &&
-          isa<triton::nvidia_gpu::AllocMBarrierOp>(value.getDefiningOp()))
-        return Interval(std::numeric_limits<size_t>::min(),
-                        std::numeric_limits<size_t>::max());
-
       auto liveOperations = liveness.resolveLiveness(value);
       auto minId = std::numeric_limits<size_t>::max();
       auto maxId = std::numeric_limits<size_t>::min();

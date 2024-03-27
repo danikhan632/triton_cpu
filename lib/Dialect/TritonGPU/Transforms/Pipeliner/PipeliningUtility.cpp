@@ -36,30 +36,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttg::AsyncWaitOp>(op))
     return op;
-  if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(rewriter, insertOp.getSrc().getType(),
-                             insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
+  if (isa<ttg::LocalLoadOp>(op))
     return op;
-  }
-  if (auto insertOp = dyn_cast<ttng::InsertSliceTMAOp>(op)) {
-    rewriter.setInsertionPoint(insertOp);
-    Value mask = getPredMask(
-        rewriter,
-        insertOp.getSrc().getType().cast<tt::PointerType>().getPointeeType(),
-        insertOp.getMask(), pred);
-    insertOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto arriveOp = dyn_cast<ttng::MBarrierArriveOp>(op)) {
-    rewriter.setInsertionPoint(arriveOp);
-    Value mask = getPredMask(rewriter, rewriter.getIntegerType(1),
-                             arriveOp.getPred(), pred);
-    arriveOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (isa<ttng::MBarrierWaitOp>(op)) {
+  if (auto asyncCopyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
+    rewriter.setInsertionPoint(asyncCopyOp);
+    Value mask = getPredMask(rewriter, asyncCopyOp.getSrc().getType(),
+                             asyncCopyOp.getMask(), pred);
+    asyncCopyOp.getMaskMutable().assign(mask);
     return op;
   }
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {

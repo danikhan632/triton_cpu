@@ -8,7 +8,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 # TODO: this shouldn't be here
-from ..backends.nvidia.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -21,22 +20,24 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
-    ids_of_folded_args: set = None
-    divisible_by_8: set = None
 
     def __post_init__(self):
         if self.divisible_by_16 is None:
             self.divisible_by_16 = set()
         if self.equal_to_1 is None:
             self.equal_to_1 = set()
-        if self.ids_of_folded_args is None:
-            self.ids_of_folded_args = set()
-        if self.divisible_by_8 is None:
-            self.divisible_by_8 = set()
+
+    def to_dict(self):
+        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
+
+    @staticmethod
+    def from_dict(data):
+        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
+                               equal_to_1=set(data.get('equal_to_1', [])))
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
@@ -80,16 +81,6 @@ def _get_num_warps_from_ir_str(src: str):
     num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
     assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
     num_warps = int(num_warps_matches[0])
-
-    # If warp specialization is enabled, the true number of warps from
-    # the perspective of e.g. CUDA is num-warps times the number of
-    # specialized groups.
-    num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
-    assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
-      "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
-    if num_warp_groups_matches:
-        num_warps *= int(num_warp_groups_matches[0])
-
     return num_warps
 
 
@@ -110,17 +101,13 @@ class ASTSource:
             self.attrs = AttrsDescriptor()
 
     def hash(self):
-        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{self.signature.values()}-{self.constants}"
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
+        sorted_sig = [v for k, v in sorted(self.signature.items())]
+        sorted_constants = [(k, v) for k, v in sorted(self.constants.items())]
+        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, context):
         return ast_to_ttir(self.fn, self, context=context, options=options)
-
-    def metadata(self):
-        # TODO: remove once TMA support is cleaned up
-        return {
-            "ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args]),
-        }
 
     def parse_options(self):
         return dict()
@@ -140,15 +127,12 @@ class IRSource:
         self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
 
     def hash(self):
-        return hashlib.md5(self.src.encode("utf-8")).hexdigest()
+        return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
-
-    def metadata(self):
-        return {"ids_of_folded_args": tuple()}
 
     def parse_options(self):
         if self.ext == "ttgir":
@@ -163,15 +147,15 @@ def triton_key():
     contents = []
     # frontend
     with open(__file__, "rb") as f:
-        contents += [hashlib.sha1(f.read()).hexdigest()]
+        contents += [hashlib.sha256(f.read()).hexdigest()]
     # compiler
     compiler_path = os.path.join(TRITON_PATH, 'compiler')
     backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
     for lib in pkgutil.iter_modules([compiler_path, backends_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha1(f.read()).hexdigest()]
+            contents += [hashlib.sha256(f.read()).hexdigest()]
     # backend
-    libtriton_hash = hashlib.sha1()
+    libtriton_hash = hashlib.sha256()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
         while True:
             chunk = f.read(1024**2)
@@ -183,7 +167,7 @@ def triton_key():
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.iter_modules([language_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha1(f.read()).hexdigest()]
+            contents += [hashlib.sha256(f.read()).hexdigest()]
     return f'{__version__}' + '-'.join(contents)
 
 
@@ -198,19 +182,54 @@ def parse(full_name, ext, context):
         return Path(full_name).read_bytes()
 
 
+def filter_traceback(e: BaseException):
+    """
+    Removes code_generator.py and related files from tracebacks.
+
+    These are uninteresting to the user -- "just show me *my* code!"
+    """
+    if e.__cause__ is not None:
+        filter_traceback(e.__cause__)
+    if e.__context__ is not None:
+        filter_traceback(e.__context__)
+
+    # If a user has a file that matches one of these, they're out of luck.
+    BAD_FILES = [
+        "/triton/compiler/code_generator.py",
+        "/ast.py",
+    ]
+
+    tb = e.__traceback__
+    frames = []
+    while tb is not None:
+        if not any(f for f in BAD_FILES if tb.tb_frame.f_code.co_filename.endswith(f)):
+            frames.append(tb)
+        tb = tb.tb_next
+
+    for (cur_frame, next_frame) in zip(frames, frames[1:]):
+        cur_frame.tb_next = next_frame
+
+    if not frames:
+        e.__traceback__ = None
+    else:
+        frames[-1].tb_next = None
+        e.__traceback__ = frames[0]
+
+
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.active.get_current_target()
     backend = make_backend(target)
+    ir_source = not isinstance(src, ASTSource)
     # create backend
-    if not isinstance(src, ASTSource):
+    if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
         src = IRSource(src)
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
     key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(get_env_vars().items()))}"
-    hash = hashlib.md5(key.encode("utf-8")).hexdigest()
+    hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
     # core changes to make it easier to track kernels by hash.
@@ -224,23 +243,29 @@ def compile(src, target=None, options=None):
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        return CompiledKernel(src, metadata_group)
+        return CompiledKernel(src, metadata_group, hash)
     # initialize metadata
     metadata = {
         "hash": hash,
         "target": target,
         **options.__dict__,
         **get_env_vars(),
-        **src.metadata(),
     }
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
+    # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
+    if ir_source:
+        first_stage += 1
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)
-    module = src.make_ir(options, context)
+    try:
+        module = src.make_ir(options, context)
+    except Exception as e:
+        filter_traceback(e)
+        raise
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{src.name}.{ext}"
@@ -257,7 +282,7 @@ def compile(src, target=None, options=None):
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # return handle to compiled kernel
-    return CompiledKernel(src, metadata_group)
+    return CompiledKernel(src, metadata_group, hash)
 
 
 def make_backend(target):
@@ -275,28 +300,24 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, src, metadata_group):
+    def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         self.metadata = json.loads(metadata_path.read_text())
-        self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
-                                            ] if 'tensormaps_info' in self.metadata else []
-        for i, _ in enumerate(self.metadata["tensormaps_info"]):
-            self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
-        self.metadata["tensormaps_info"] = tuple(self.metadata["tensormaps_info"])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
         self.metadata = KernelMetadata(**self.metadata)
+        self.src = src
+        self.hash = hash
 
         self.name = self.metadata.name
-        # create launcher
-        self.run = driver.active.launcher_cls(src, self.metadata)
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
+        binary_ext = make_backend(self.metadata.target).binary_ext
         self.asm = {
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.active.binary_ext else file.read_text()
+            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         }
-        self.kernel = self.asm[driver.active.binary_ext]
+        self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
@@ -307,6 +328,8 @@ class CompiledKernel:
         if self.module is not None:
             return
         device = driver.active.get_current_device()
+        # create launcher
+        self.run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
@@ -328,9 +351,8 @@ class CompiledKernel:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
             md = self.metadata
-            args_expand = driver.active.assemble_tensormap_to_arg(md.tensormaps_info, args)
             self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
                      md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
-                     CompiledKernel.launch_exit_hook, md, *args_expand)
+                     CompiledKernel.launch_exit_hook, md, *args)
 
         return runner

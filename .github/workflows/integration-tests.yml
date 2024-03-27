@@ -3,14 +3,17 @@ name: Integration Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    # You can name your branch dev-foo to get CI runs.
+    branches: [main, 'dev-**']
   merge_group:
-    branches: [main]
+    branches: [main, 'dev-**']
     types: [checks_requested]
 
 concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions: read-all
 
 env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
@@ -38,7 +41,7 @@ jobs:
     needs: Runner-Preparation
 
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     strategy:
       matrix:
@@ -53,7 +56,6 @@ jobs:
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
-          echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
           echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
@@ -67,6 +69,10 @@ jobs:
       - name: Check pre-commit
         run: |
           python3 -m pip install --upgrade pre-commit
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
           python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton
@@ -90,33 +96,18 @@ jobs:
           fi
           lit -v "${LIT_TEST_DIR}"
 
-      - name: Enable TMA
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'H100')}}
-        run: |
-          echo "ENABLE_TMA=1" >> "${GITHUB_ENV}"
-
-      - name: Run python tests on CUDA with ENABLE_TMA=1
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
+      - name: Run python tests on CUDA
+        if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=operators --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -vvv -n 8 language/test_subprocess.py
-          # run runtime tests serially to avoid race condition with cache handling.
+          # Run runtime tests serially to avoid race condition with cache handling
           python3 -m pytest -vvv runtime/
-          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
-          #run hopper/test_flashattention.py to avoid out of gpu memory
-          python3 -m pytest -vvv hopper/test_flashattention.py
-
-      - name: Run python tests on CUDA with ENABLE_TMA=0
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
-        run: |
-          cd python/test/unit
-          python3 -bb -m pytest -vvv -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
-          # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest -vvv runtime/
-          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
+          # Run hopper/test_flashattention.py separately to avoid out of gpu memory
+          python3 -m pytest -vs hopper/test_flashattention.py
 
       - name: Clear cache
         run: |
@@ -124,20 +115,14 @@ jobs:
 
       - name: Run interpreter tests
         env:
-          # TRITON_INTERPRET: "1"
-          CUA_VISIBLE_DEVICES: ""
+          TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -s operators/test_flash_attention.py
+          python3 -m pytest -vvv -n 4 -m interpreter language/test_core.py --device cpu
+          python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
-      - name: Run partial tests on CUDA with ENABLE_TMA=1
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1'}}
-        run: |
-          cd python/test/unit
-          python3 -m pytest -vvv -n 8 operators
-
-      - name: Run partial tests on CUDA with ENABLE_TMA=0
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0'}}
+      - name: Run partial tests on CUDA
+        if: ${{ env.BACKEND == 'CUDA' }}
         run: |
           cd python/test/unit
           python3 -m pytest -vvv -n 8 operators
@@ -162,15 +147,6 @@ jobs:
           cd "build/$(ls build | grep -i cmake)"
           ctest
 
-      - name: Regression tests
-        if: ${{ contains(matrix.runner, 'A100') }}
-        run: |
-          python3 -m pip install pytest-rerunfailures
-          cd python/test/regression
-          sudo nvidia-smi -i 0 -pm 1
-          sudo nvidia-smi -i 0 --lock-gpu-clocks=1280,1280
-          python3 -m pytest -vvv -s . --reruns 10
-          sudo nvidia-smi -i 0 -rgc
 
   Compare-artifacts:
     needs: Integration-Tests

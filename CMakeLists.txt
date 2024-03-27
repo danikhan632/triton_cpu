@@ -30,8 +30,8 @@ set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 # used conditionally in this file and by lit tests
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
-set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O0 -g")
-set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O0 -g")
+set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -110,6 +110,8 @@ include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
+include_directories(${PROJECT_SOURCE_DIR}/third_party)
+include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
@@ -147,13 +149,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   if (DEFINED TRITON_PLUGIN_DIRS)
     foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
-      # Generate a list of plugin names by getting the last component of the provided paths.
-      # Note that each path must not end with a slash, otherwise cmake_path will return empty
-      # string as the name.
-      cmake_path(GET PLUGIN_DIR FILENAME PLUGIN_NAME)
-      if("${PLUGIN_NAME}" STREQUAL "")
-        message(FATAL_ERROR "Plugin dir ${PLUGIN_DIR} must not end with a slash")
-      endif()
+      # Read the plugin name under dir/backend/name.conf
+      cmake_path(APPEND PLUGIN_DIR "backend" "name.conf" OUTPUT_VARIABLE PLUGIN_NAME_PATH)
+      file(READ ${PLUGIN_NAME_PATH} PLUGIN_NAME)
+      string(STRIP ${PLUGIN_NAME} PLUGIN_NAME)
+
       list(APPEND TRITON_PLUGIN_NAMES ${PLUGIN_NAME})
 
       # Include the plugin as part of the build, placing the build output under
@@ -199,14 +199,23 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
     # LLVM
     LLVMPasses
-    LLVMX86CodeGen
-    LLVMX86AsmParser
     LLVMNVPTXCodeGen
     # LLVMNVPTXAsmPrinter
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
 
   )
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+      list(APPEND TRITON_LIBRARIES
+          LLVMAArch64CodeGen
+          LLVMAArch64AsmParser
+      )
+  else()
+      list(APPEND TRITON_LIBRARIES
+          LLVMX86CodeGen
+          LLVMX86AsmParser
+      )
+  endif()
 
   # Define triton library
   string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
@@ -244,6 +253,12 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   endif()
 
   target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})
+endif()
+
+if(NOT TRITON_BUILD_PYTHON_MODULE)
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    add_subdirectory(third_party/${CODEGEN_BACKEND})
+  endforeach()
 endif()
 
 add_subdirectory(bin)

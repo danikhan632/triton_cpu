@@ -14,6 +14,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
@@ -47,6 +48,14 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     assert(shortPtr);
     shortPtr->setValue(true);
   }
+  if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+    auto optIt = options.find("print-after-all");
+    if (optIt != options.end()) {
+      auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+      *optPtr = true;
+    }
+  }
+
   // inline everything
   for (llvm::Function &f : module.functions())
     if (!f.hasFnAttribute(llvm::Attribute::NoInline))
@@ -153,13 +162,29 @@ void init_triton_llvm(py::module &&m) {
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {
-    if (triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
       return;
     using namespace llvm;
     LoopAnalysisManager lam;
     FunctionAnalysisManager fam;
     CGSCCAnalysisManager cgam;
     ModuleAnalysisManager mam;
+
+    PassInstrumentationCallbacks *instrCbPtr = nullptr;
+    PassInstrumentationCallbacks passInstrCb;
+    StandardInstrumentations standardInstr(mod->getContext(),
+                                           /*DebugLogging*/ true);
+    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+      auto optMap = llvm::cl::getRegisteredOptions();
+      auto optIt = optMap.find("print-after-all");
+      if (optIt != optMap.end()) {
+        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+        *optPtr = true;
+      }
+      standardInstr.registerCallbacks(passInstrCb, &mam);
+      instrCbPtr = &passInstrCb;
+    }
+
     PipelineTuningOptions tuningOptions;
     tuningOptions.LoopUnrolling = true;
     tuningOptions.LoopInterleaving = true;
@@ -172,7 +197,8 @@ void init_triton_llvm(py::module &&m) {
     // some scheduling solution.
     tuningOptions.SLPVectorization = true;
 
-    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions);
+    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
+                   instrCbPtr);
 
     pb.registerModuleAnalyses(mam);
     pb.registerCGSCCAnalyses(cgam);
@@ -198,21 +224,25 @@ void init_triton_llvm(py::module &&m) {
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject) -> py::object {
-        py::gil_scoped_release allow_threads;
-        // create LLVM module from C++
-        llvm::LLVMContext context;
-        std::unique_ptr<llvm::MemoryBuffer> buffer =
-            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-        llvm::SMDiagnostic error;
-        std::unique_ptr<llvm::Module> module =
-            llvm::parseIR(buffer->getMemBufferRef(), error, context);
-        if (!module) {
-          llvm::report_fatal_error(
-              "failed to parse IR: " + error.getMessage() +
-              "lineno: " + std::to_string(error.getLineNo()));
+        std::string obj;
+        {
+          // when allow_threads goes out of scope, gil will be released
+          py::gil_scoped_release allow_threads;
+          // create LLVM module from C++
+          llvm::LLVMContext context;
+          std::unique_ptr<llvm::MemoryBuffer> buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module) {
+            llvm::report_fatal_error(
+                "failed to parse IR: " + error.getMessage() +
+                "lineno: " + std::to_string(error.getLineNo()));
+          }
+          obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
+                                     enable_fp_fusion, isObject);
         }
-        std::string obj = translateLLVMIRToASM(
-            *module, triple, proc, features, flags, enable_fp_fusion, isObject);
         if (isObject)
           return py::bytes(obj);
         else

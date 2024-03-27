@@ -12,7 +12,7 @@ library_dir = [os.path.join(dirname, "lib")]
 libraries = ['amdhip64']
 
 def compile_module_from_src(src, name):
-    key = hashlib.md5(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:
@@ -61,7 +61,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
+def make_launcher(constants, signature, ids, warp_size):
     start_desc = len(signature)
     #signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
@@ -97,9 +97,8 @@ def make_launcher(constants, signature, ids):
     format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
-    folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
     params = [
-        i for i in signature.keys() if i >= start_desc or (i not in constants and i not in folded_without_constexprs)
+        i for i in signature.keys() if i not in constants
     ]
     src = f"""
 #define __HIP_PLATFORM_AMD__
@@ -126,7 +125,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
   // printf("_launch hip kernel\\n");
   void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
   if (gridX*gridY*gridZ > 0) {{
-      HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 64*num_warps, 1, 1, shared_memory, stream, params, 0));
+      HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
     }}
   }}
 
@@ -189,9 +188,9 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   int shared_memory;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
-  PyObject *compiled_kernel = NULL;
+  PyObject *metadata = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas, &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel{', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas, &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &metadata{', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
     return NULL;
   }}
 
@@ -242,17 +241,16 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 
 class HIPLauncher(object):
-    
+
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
-        src = make_launcher(constants, src.signature, ids)
+        src = make_launcher(constants, src.signature, ids, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
-    
+
     def __call__(self, *args, **kwargs):
         self.launch(*args, **kwargs)
 
@@ -262,7 +260,6 @@ class HIPDriver(GPUDriver):
     def __init__(self):
         super().__init__()
         self.utils = HIPUtils()
-        self.binary_ext = "hsaco"
         self.launcher_cls = HIPLauncher
 
     @staticmethod
@@ -272,5 +269,7 @@ class HIPDriver(GPUDriver):
 
     def get_current_target(self):
         device = self.get_current_device()
-        arch = self.utils.get_device_properties(device)['arch']
-        return ("hip", arch.split(':')[0])
+        device_properties = self.utils.get_device_properties(device)
+        arch = device_properties['arch']
+        warpSize = device_properties['warpSize']
+        return ["hip", arch.split(':')[0], warpSize]

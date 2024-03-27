@@ -58,7 +58,7 @@ class LoopPipeliner {
   /// load => buffer
   DenseMap<Value, Value> loadsBuffer;
   /// load => buffer type (with shared layout after swizzling)
-  DenseMap<Value, RankedTensorType> loadsBufferType;
+  DenseMap<Value, triton::MemDescType> loadsBufferType;
 
   /// Iterator values
   Value nextLoopCond;
@@ -408,7 +408,8 @@ void LoopPipeliner::createBufferTypes() {
     auto sharedEnc =
         ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
                                      ttg::getOrder(ty.getEncoding()), CTALayout, eType);
-    loadsBufferType[loadOp] = RankedTensorType::get(bufferShape, eType, sharedEnc);
+    loadsBufferType[loadOp] =
+        triton::MemDescType::get(bufferShape, eType, sharedEnc);
   }
 }
 
@@ -501,10 +502,9 @@ bool LoopPipeliner::isLoadChain(Operation *op) const {
   if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     Value loadVal = cvtOp.getSrc();
     if (auto f2fOp = dyn_cast<triton::FpToFpOp>(op))
-      loadVal = f2fOp.getFrom();
+      loadVal = f2fOp.getSrc();
     if (validLoads.contains(loadVal.getDefiningOp())) {
-      auto cvtDstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
-      if (cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>())
+      if (cvtOp.getType().getEncoding().isa<ttg::DotOperandEncodingAttr>())
         return true;
     }
   }
@@ -535,7 +535,7 @@ void LoopPipeliner::emitPrologue() {
       auto newLoadOp = cloneWithInferType(builder, op, prologueMap);
       Value loadVal = newLoadOp->getResult(0);
       // Convert from regs to shared mem
-      newOp = builder.create<ttg::ConvertLayoutOp>(loadOp.getLoc(),
+      newOp = builder.create<ttg::LocalAllocOp>(loadOp.getLoc(),
                                                    loadsBufferType[loadOp],
                                                    loadVal);
       Value cvtVal = newOp->getResult(0);
@@ -572,10 +572,21 @@ void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (currentDeps.contains(&op)) {
       Operation *newOp = nullptr;
-      if (isLoadChain(&op))
-        newOp = builder.clone(op, epilogueMap);
-      else
+      if (isLoadChain(&op)) {
+        if (auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(&op)) {
+          Value mappedValue = epilogueMap.lookup(cvt.getSrc());
+          if (isa<triton::MemDescType>(mappedValue.getType())) {
+            auto newCvt = builder.create<triton::gpu::LocalLoadOp>(
+                cvt.getLoc(), cvt.getType(), mappedValue);
+            epilogueMap.map(cvt.getResult(), newCvt);
+            newOp = newCvt;
+          }
+        }
+        if (!newOp)
+          newOp = builder.clone(op, epilogueMap);
+      } else {
         newOp = cloneWithInferType(builder, &op, epilogueMap);
+      }
       // substitute for these results for the results of the new for loop
       for (const auto &pair : llvm::zip(op.getResults(), newOp->getResults())) {
         auto val = std::get<0>(pair);
@@ -718,10 +729,21 @@ void LoopPipeliner::cloneCurrentBody(OpBuilder &builder) {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (currentDeps.contains(&op)) {
       Operation *newOp = nullptr;
-      if (isLoadChain(&op))
-        newOp = builder.clone(op, curMapping);
-      else
+      if (isLoadChain(&op)) {
+        if (auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(&op)) {
+          Value mappedValue = curMapping.lookup(cvt.getSrc());
+          if (isa<triton::MemDescType>(mappedValue.getType())) {
+            auto newCvt = builder.create<triton::gpu::LocalLoadOp>(
+                cvt.getLoc(), cvt.getType(), mappedValue);
+            curMapping.map(cvt.getResult(), newCvt);
+            newOp = newCvt;
+          }
+        }
+        if (!newOp)
+          newOp = builder.clone(op, curMapping);
+      } else {
         newOp = cloneWithInferType(builder, &op, curMapping);
+      }
     }
   }
 }
@@ -751,9 +773,9 @@ void LoopPipeliner::storeNextBuffer(OpBuilder &builder) {
     Value loadVal = nextMapping.lookup(loadOp->getResult(0));
     // then store regs -> shared
     Value storeBuf = pplForOp.getRegionIterArgs()[bufferIdx + nextBuffers.size()];
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(
+    auto alloc = builder.create<ttg::LocalAllocOp>(
           loadOp->getLoc(), storeBuf.getType(), loadVal);
-    nextBuffers.push_back(cvt);
+    nextBuffers.push_back(alloc);
   }
 
   // Some values have not been used by any ops in the loop body

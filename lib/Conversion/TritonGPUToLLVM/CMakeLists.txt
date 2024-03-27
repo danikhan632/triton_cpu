@@ -1,30 +1,21 @@
 add_triton_library(TritonGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
-    ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/FMA.cpp
-    DotOpToLLVM/MMAv1.cpp
-    DotOpToLLVM/MMAv2.cpp
-    DotOpToLLVM/WGMMA.cpp
-    DotOpToLLVM.cpp
-    HistogramOpToLLVM.cpp
-    ElementwiseOpToLLVM.cpp
-    LoadStoreOpToLLVM.cpp
-    BarrierOpToLLVM.cpp
-    TritonGPUToLLVM.cpp
-    TritonGPUToLLVMPass.cpp
-    DecomposeUnsupportedConversions.cpp
-    ReduceOpToLLVM.cpp
-    ScanOpToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
+    ElementwiseOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
+    AssertOpToLLVM.cpp
     ViewOpToLLVM.cpp
-    TensorPtrOpsToLLVM.cpp
-    ClusterOpsToLLVM.cpp
-    RegReallocOpToLLVM.cpp
-    PTXAsmFormat.cpp
+    MakeRangeOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
     AllocateSharedMemory.cpp
+    ReduceOpToLLVM.cpp
+    ScanOpToLLVM.cpp
+    ConvertLayoutOpToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
+    FuncOpToLLVM.cpp
+    SPMDOpToLLVM.cpp
 
     DEPENDS
     TritonGPUConversionPassIncGen

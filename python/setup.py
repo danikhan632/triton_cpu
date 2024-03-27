@@ -39,8 +39,8 @@ class BackendInstaller:
         # Initialize submodule if there is one for in-tree backends.
         if not is_external:
             root_dir = os.path.join(os.pardir, "third_party")
-            if backend_name not in os.listdir(root_dir):
-                raise Exception(f"{backend_name} is requested for install but not present in {root_dir}")
+            assert backend_name in os.listdir(
+                root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
 
             try:
                 subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
@@ -52,16 +52,15 @@ class BackendInstaller:
 
             backend_src_dir = os.path.join(root_dir, backend_name)
 
-        backend_dir = os.path.abspath(os.path.join(backend_src_dir, "backend"))
-        if not os.path.exists(backend_dir):
-            raise Exception(f"{backend_dir} does not exist!")
+        backend_path = os.path.abspath(os.path.join(backend_src_dir, "backend"))
+        assert os.path.exists(backend_path), f"{backend_path} does not exist!"
+
         for file in ["compiler.py", "driver.py"]:
-            if not os.path.exists(os.path.join(backend_dir, file)):
-                raise Exception(f"${file} does not exist in ${backend_dir}")
+            assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
         install_dir = os.path.join(os.path.dirname(__file__), "triton", "backends", backend_name)
-        package_data = [f"{os.path.relpath(p, backend_dir)}/*" for p, _, _, in os.walk(backend_dir)]
-        return Backend(name=backend_name, package_data=package_data, src_dir=backend_src_dir, backend_dir=backend_dir,
+        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
+        return Backend(name=backend_name, package_data=package_data, src_dir=backend_src_dir, backend_dir=backend_path,
                        install_dir=install_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
@@ -71,21 +70,14 @@ class BackendInstaller:
 
     # Copy all external plugins provided by the `TRITON_PLUGIN_DIRS` env var.
     # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
-    # The last components of the paths must be valid python identifiders.
+    # Expect to find the name of the backend under dir/backend/name.conf
     @staticmethod
     def copy_externals():
-
-        def get_backend_name(dir: str):
-            name = Path(dir).name
-            if not name.isidentifier():
-                raise Exception(f"{name} must be a valid python identifier")
-            return name
-
         backend_dirs = os.getenv("TRITON_PLUGIN_DIRS")
         if backend_dirs is None:
             return []
         backend_dirs = backend_dirs.strip().split(";")
-        backend_names = [get_backend_name(dir) for dir in backend_dirs]
+        backend_names = [Path(os.path.join(dir, "backend", "name.conf")).read_text().strip() for dir in backend_dirs]
         return [
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)
@@ -218,7 +210,7 @@ def download_and_copy(src_path, variable, version, url_func):
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
-    arch = {"x86_64": "64", "arm64": "aarch64"}[platform.machine()]
+    arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
     url = url_func(arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia")  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
@@ -380,23 +372,23 @@ class CMakeBuild(build_ext):
 download_and_copy(
     src_path="bin/ptxas",
     variable="TRITON_PTXAS_PATH",
-    version="12.3.52",
+    version="12.4.99",
     url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvcc/12.3.52/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
-    version="12.3.52",
+    version="12.4.99",
     url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cuobjdump/12.3.52/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
-    version="12.3.52",
+    version="12.4.99",
     url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
 backends = [*BackendInstaller.copy(["nvidia", "amd", "triton_shared"]), *BackendInstaller.copy_externals()]
@@ -456,6 +448,7 @@ setup(
         "triton/compiler",
         "triton/language",
         "triton/language/extra",
+        "triton/language/extra/cuda",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",

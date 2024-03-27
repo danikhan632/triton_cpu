@@ -57,9 +57,6 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createRemoveLayoutConversionsPass);
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      createReduceDataDuplicationPass);
-  // pre-process for conversion to LLVM
-  ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
-                     createDecomposeUnsupportedConversionsPass);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      createAllocateSharedMemoryPass);
 }
