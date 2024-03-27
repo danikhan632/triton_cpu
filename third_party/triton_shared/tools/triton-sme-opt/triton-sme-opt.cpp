@@ -32,12 +32,7 @@
 
 using namespace mlir;
 
-constexpr int64_t MAX_LOOPS = 64;
-
-namespace {
-struct OuterProductVectorizationPass;
-
-
+namespace matmul_conversion {
 
 struct MatmulTileConversion : public OpRewritePattern<linalg::MatmulOp> {
   explicit MatmulTileConversion(MLIRContext *context, bool enableSME)
@@ -95,6 +90,7 @@ struct MatmulTileConversion : public OpRewritePattern<linalg::MatmulOp> {
     return success();
   }
 
+
 private:
   bool enableSME;
 };
@@ -104,12 +100,6 @@ struct MatmulTileConversionPass
                           OperationPass<func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MatmulTileConversionPass)
 
-  StringRef getArgument() const final {
-    return "matmul-tile-conversion";
-  }
-  StringRef getDescription() const final {
-    return "Matmul tile conversion pass";
-  }
   explicit MatmulTileConversionPass(bool enableSME) : enableSME(enableSME) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -141,12 +131,8 @@ private:
 struct OuterProductVectorizationPass
     : public PassWrapper<OuterProductVectorizationPass,
                           OperationPass<func::FuncOp>> {
-  StringRef getArgument() const final {
-    return "outer-product-vectorization";
-  }
-  StringRef getDescription() const final {
-    return "Outer product vectorization pass";
-  }
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(OuterProductVectorizationPass)
+
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<vector::VectorDialect, func::FuncDialect>();
   }
@@ -180,10 +166,10 @@ std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
   return std::make_unique<MatmulTileConversionPass>(enableSME);
 }
 
-} // namespace
+} // namespace matmul_conversion
 
 int main(int argc, char **argv) {
-  DialectRegistry registry;
+ DialectRegistry registry;
 
   registry.insert<func::FuncDialect, arith::ArithDialect, math::MathDialect,
                   linalg::LinalgDialect, affine::AffineDialect, scf::SCFDialect,
@@ -198,12 +184,13 @@ int main(int argc, char **argv) {
   context.appendDialectRegistry(registry);
   context.loadAllAvailableDialects();
 
+
   PassPipelineRegistration<> smeConversionPipeline(
       "sme-conversion",
       "Converts linalg.matmul to a more optimized form using SME",
       [](OpPassManager &pm) {
-        pm.addPass(createMatmulTileConversionPass(true));
-        pm.addPass(createOuterProductVectorizationPass());
+        pm.addPass(matmul_conversion::createMatmulTileConversionPass(true));
+        pm.addPass(matmul_conversion::createOuterProductVectorizationPass());
       });
 
   return asMainReturnCode(
