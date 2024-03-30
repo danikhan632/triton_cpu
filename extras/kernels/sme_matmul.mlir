@@ -75,8 +75,6 @@ module attributes {transform.with_named_sequence} {
     // Step 3: Bufferize ahead of TransferReadDropUnitDimsPattern, which
     // currently only supports memrefs.
 
-    //; %func = transform.structured.match ops{["func.func"]} in %module: (!transform.any_op) -> !transform.any_op
-
 
     %bufferize = transform.bufferization.one_shot_bufferize %module{bufferize_function_boundaries=true} : (!transform.any_op) -> !transform.any_op
 
@@ -92,11 +90,11 @@ module attributes {transform.with_named_sequence} {
     // Step 5: Lower vector.contract to vector.outerproduct. Also drop unit
     // dims, specifically to prevent vector.transfer_read of vector<[4]x1xf32>,
     // which can't be lowered in generic path.
-    transform.apply_patterns to %func {
-      transform.apply_patterns.vector.lower_contraction lowering_strategy = "outerproduct"
-      transform.apply_patterns.vector.lower_masks
-      transform.apply_patterns.vector.rank_reducing_subview_patterns
-    } : !transform.any_op
+   // transform.apply_patterns to %func {
+   //   transform.apply_patterns.vector.lower_contraction lowering_strategy = "outerproduct"
+   //   transform.apply_patterns.vector.lower_masks
+   //   transform.apply_patterns.vector.rank_reducing_subview_patterns
+   //   } : !transform.any_op
 
     transform.yield
   }

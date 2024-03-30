@@ -19,20 +19,76 @@
 #include <iostream>
 #include <llvm/Support/raw_ostream.h>
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
-#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
-#include "mlir/Dialect/Tensor/Transforms/Passes.h"
-#include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"
 #include "mlir/Dialect/Linalg/TransformOps/LinalgTransformOps.h"
-#include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
-#include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"
-#include "mlir/Dialect/Bufferization/IR/BufferizableOpInterface.h"
-#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
 
 namespace matmul_conversion {
+
+
+struct RestrictToTensorOpsPass
+    : public PassWrapper<RestrictToTensorOpsPass, OperationPass<func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RestrictToTensorOpsPass)
+
+  void runOnOperation() override {
+    func::FuncOp funcOp = getOperation();
+    MLIRContext *context = &getContext();
+
+    funcOp.walk([&](bufferization::ToTensorOp op) {
+      OpBuilder builder(op);
+      Location loc = op.getLoc();
+      Value alloc = op.getMemref();
+      Type tensorType = op.getType();
+
+      Value tensor = builder.create<bufferization::ToTensorOp>(
+          loc, tensorType, alloc, true /* restrict */, true /* writable */);
+      op.replaceAllUsesWith(tensor);
+      op.erase();
+    });
+  }
+};
+struct OneShotBufferizationPass : public PassWrapper<OneShotBufferizationPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(OneShotBufferizationPass)
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<bufferization::BufferizationDialect>();
+  }
+
+  void runOnOperation() override {
+    ModuleOp moduleOp = getOperation();
+    MLIRContext *context = &getContext();
+
+    // Set up OneShotBufferizationOptions.
+    bufferization::OneShotBufferizationOptions options;
+    //  auto options = mlir::bufferization::OneShotBufferizationOptions();
+    options.allowReturnAllocsFromLoops = true;
+    options.allowUnknownOps = true;
+    options.bufferizeFunctionBoundaries = true;
+    options.unknownTypeConverterFn =
+        [](mlir::Value value, mlir::Attribute memorySpace,
+           const mlir::bufferization::BufferizationOptions &options) {
+          return mlir::bufferization::getMemRefTypeWithStaticIdentityLayout(
+              value.getType().cast<mlir::TensorType>(), memorySpace);
+        };
+    options.setFunctionBoundaryTypeConversion(
+        mlir::bufferization::LayoutMapOption::IdentityLayoutMap);
+    // options.getMemorySpaceFn = [](mlir::TensorType t) {
+    //   if (auto rt = t.dyn_cast<mlir::RankedTensorType>())
+    //     return rt.getEncoding();
+    //   return mlir::Attribute();
+    // };
+
+    // Run One-Shot Bufferize.
+    if (failed(bufferization::runOneShotBufferize(moduleOp, options))) {
+      return signalPassFailure();
+    }
+  }
+};
+
+
 
 struct MatmulTileConversion : public OpRewritePattern<linalg::MatmulOp> {
   explicit MatmulTileConversion(MLIRContext *context, bool enableSME)
@@ -138,19 +194,32 @@ struct OuterProductVectorizationPass
   }
 
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+   func::FuncOp funcOp = getOperation();
     MLIRContext *context = funcOp.getContext();
     RewritePatternSet patterns(context);
     ConversionTarget target(*context);
+      // Apply patterns for lowering masked transfers
+    transform::ApplyLowerMaskedTransfersPatternsOp lowerMaskedTransfersPatterns;
+    lowerMaskedTransfersPatterns.populatePatterns(patterns);
 
-    vector::populateVectorMaskLoweringPatternsForSideEffectingOps(patterns);
-    vector::populateVectorReductionToContractPatterns(patterns);
-    vector::populateVectorMaskOpLoweringPatterns(patterns);
-    vector::populateVectorTransferDropUnitDimsPatterns(patterns);
-    vector::VectorTransformsOptions vectorTransformOptions;
+    // Apply patterns for transfer permutation
+    transform::ApplyTransferPermutationPatternsOp transferPermutationPatterns;
+    transferPermutationPatterns.populatePatterns(patterns);
 
-    vectorTransformOptions.setVectorTransformsOptions(vector::VectorContractLowering::OuterProduct);
-    vector::populateVectorContractLoweringPatterns(patterns, vectorTransformOptions);
+    // Apply patterns for reduction to contract
+    transform::ApplyVectorReductionToContractPatternsOp reductionToContractPatterns;
+    reductionToContractPatterns.populatePatterns(patterns);
+    transform::ApplyLowerMasksPatternsOp lowerMasksPatterns;
+    lowerMasksPatterns.populatePatterns(patterns);
+
+    // Apply patterns for rank-reducing subview
+    transform::ApplyRankReducingSubviewPatternsOp rankReducingSubviewPatterns;
+    rankReducingSubviewPatterns.populatePatterns(patterns);
+    
+    vector::populateVectorContractLoweringPatterns(
+        patterns, vector::VectorTransformsOptions().setVectorTransformsOptions(
+                      vector::VectorContractLowering::OuterProduct));
+    target.addIllegalOp<vector::ContractionOp>();  
 
     if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
       return signalPassFailure();
@@ -158,14 +227,21 @@ struct OuterProductVectorizationPass
   }
 };
 
+
 std::unique_ptr<Pass> createOuterProductVectorizationPass() {
   return std::make_unique<OuterProductVectorizationPass>();
 }
-
 std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
   return std::make_unique<MatmulTileConversionPass>(enableSME);
 }
 
+std::unique_ptr<Pass> createRestrictToTensorOpsPass() {
+  return std::make_unique<RestrictToTensorOpsPass>();
+}
+
+std::unique_ptr<Pass> createOneShotBufferizationPass() {
+  return std::make_unique<OneShotBufferizationPass>();
+}
 } // namespace matmul_conversion
 
 int main(int argc, char **argv) {
@@ -190,7 +266,13 @@ int main(int argc, char **argv) {
       "Converts linalg.matmul to a more optimized form using SME",
       [](OpPassManager &pm) {
         pm.addPass(matmul_conversion::createMatmulTileConversionPass(true));
-        pm.addPass(matmul_conversion::createOuterProductVectorizationPass());
+        pm.addPass(matmul_conversion::createRestrictToTensorOpsPass());
+         pm.addPass(matmul_conversion::createOneShotBufferizationPass());
+          pm.addPass(matmul_conversion::createOuterProductVectorizationPass());
+
+
+        
+
       });
 
   return asMainReturnCode(

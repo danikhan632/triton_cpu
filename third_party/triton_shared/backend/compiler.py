@@ -58,20 +58,20 @@ def _optimize_ttsharedir(ttsharedir: str):
         dst_path_1 = os.path.join(tmpdir, "ttsme_1.mlir")
         dst_path_2 = os.path.join(tmpdir, "ttsme_2.mlir")
         Path(src_path).write_text(ttsharedir)
-        triton_shared_opt_path = _get_triton_SME_path()
+        triton_sme_opt_path = _get_triton_SME_path()
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
-        subprocess.check_call([triton_shared_opt_path, src_path, "-sme-conversion" , "-o", dst_path_1])
+        subprocess.check_call([triton_sme_opt_path, src_path, "-sme-conversion","--debug" , "-o", dst_path_1])
         output_1= Path(dst_path_1).read_text()
         printc(output_1)
-        subprocess.check_call([triton_shared_opt_path, dst_path_1, "-sve-conversion", "-o", dst_path_2 , ])
-        output_2= Path(dst_path_2).read_text()
-        printc(output_2,"red")
-        output= output_2
+        # subprocess.check_call([mlir_opt_path, output_1, "--linalg-bufferize", "-o", dst_path_2 , ])
+        # output_2= Path(dst_path_2).read_text()
+        # printc(output_2,"red")
+        output= output_1
         # subprocess.check_call([mlir_opt_path, dst_path2, "--one-shot-bufferize=allow-unknown-ops", "-o", dst_path])
         # output= Path(dst_path).read_text()
         # if "vector.contract" in output:
         #     raise Exception("SME conversion failed, vector.contract found in output")
-        pre_outer =open("/home/green/code/triton-cpu/extras/kernels/pre_outer.mlir","r").read()
+
         # if output.strip() == pre_outer.strip():
         #     raise Exception("SME conversion failed, output is same as pre_outer.mlir")
         # output = pre_outer
@@ -89,8 +89,6 @@ def _ttsharedir_to_llir(ttsharedir: str):
         subprocess.check_call([mlir_opt_path, ttshared_path,
             "--convert-linalg-to-affine-loops",
             "--eliminate-empty-tensors",
-            "--empty-tensor-to-alloc-tensor",
-            "--one-shot-bufferize=allow-return-allocs-from-loops=true",
             "--lower-affine",
             "--convert-linalg-to-loops",
             "--convert-scf-to-cf",
