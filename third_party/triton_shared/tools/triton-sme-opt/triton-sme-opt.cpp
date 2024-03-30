@@ -168,24 +168,24 @@ struct PrefetchingPass : public PassWrapper<PrefetchingPass, OperationPass<func:
     //                                       /*isWrite=*/false, /*localityHint=*/0, /*isDataCache=*/true);
     // }
 
-    // void insertPrefetchingBeforeCopy(scf::ForOp forOp, PatternRewriter &rewriter) const {
-    //   auto copyOp = forOp.getBody()->getTerminator()->getPrevNode();
-    //   if (!isa<memref::CopyOp>(copyOp))
-    //     return;
+    void insertPrefetchingBeforeCopy(scf::ForOp forOp, PatternRewriter &rewriter) const {
+      auto copyOp = forOp.getBody()->getTerminator()->getPrevNode();
+      if (!isa<memref::CopyOp>(copyOp))
+        return;
 
-    //   OpBuilder::InsertionGuard guard(rewriter);
-    //   rewriter.setInsertionPoint(copyOp);
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(copyOp);
 
-    //   // Get the memref operand for prefetching
-    //   auto memref = cast<memref::CopyOp>(copyOp).getTarget();
+      // Get the memref operand for prefetching
+      auto memref = cast<memref::CopyOp>(copyOp).getTarget();
 
-    //   // Create constants for prefetch indices
-    //   auto zeroIndex = rewriter.create<arith::ConstantIndexOp>(copyOp->getLoc(), 0);
+      // Create constants for prefetch indices
+      auto zeroIndex = rewriter.create<arith::ConstantIndexOp>(copyOp->getLoc(), 0);
 
-    //   // Create memref.prefetch operation
-    //   rewriter.create<memref::PrefetchOp>(copyOp->getLoc(), memref, ValueRange{zeroIndex},
-    //                                       /*isWrite=*/true, /*localityHint=*/0, /*isDataCache=*/true);
-    // }
+      // Create memref.prefetch operation
+      rewriter.create<memref::PrefetchOp>(copyOp->getLoc(), memref, ValueRange{zeroIndex},
+                                          /*isWrite=*/true, /*localityHint=*/0, /*isDataCache=*/true);
+    }
   
   
   
@@ -397,20 +397,23 @@ struct OuterProductVectorizationPass
 };
 
 
-std::unique_ptr<Pass> createOuterProductVectorizationPass() {
-  return std::make_unique<OuterProductVectorizationPass>();
-}
-std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
-  return std::make_unique<MatmulTileConversionPass>(enableSME);
-}
+  std::unique_ptr<Pass> createOuterProductVectorizationPass() {
+    return std::make_unique<OuterProductVectorizationPass>();
+  }
+  std::unique_ptr<Pass> createPrefetchPass() {
+    return std::make_unique<PrefetchingPass>();
+  }
+  std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
+    return std::make_unique<MatmulTileConversionPass>(enableSME);
+  }
 
-std::unique_ptr<Pass> createRestrictToTensorOpsPass() {
-  return std::make_unique<RestrictToTensorOpsPass>();
-}
+  std::unique_ptr<Pass> createRestrictToTensorOpsPass() {
+    return std::make_unique<RestrictToTensorOpsPass>();
+  }
 
-std::unique_ptr<Pass> createOneShotBufferizationPass() {
-  return std::make_unique<OneShotBufferizationPass>();
-}
+  std::unique_ptr<Pass> createOneShotBufferizationPass() {
+    return std::make_unique<OneShotBufferizationPass>();
+  }
 } // namespace matmul_conversion
 
 int main(int argc, char **argv) {
@@ -448,6 +451,13 @@ int main(int argc, char **argv) {
         pm.addPass(matmul_conversion::createRestrictToTensorOpsPass());
         pm.addPass(matmul_conversion::createOneShotBufferizationPass());
         pm.addPass(matmul_conversion::createOuterProductVectorizationPass());
+      });
+
+  PassPipelineRegistration<> prefConversionPipeline(
+      "prefetch",
+      "Converts linalg.matmul to a more optimized form using SME",
+      [](OpPassManager &pm) {
+        pm.addPass(matmul_conversion::createPrefetchPass());
       });
 
 
