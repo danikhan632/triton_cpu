@@ -55,18 +55,21 @@ def _optimize_ttsharedir(ttsharedir: str):
         return ttsharedir
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "ttshared.mlir")
-        dst_path_1 = os.path.join(tmpdir, "ttsme_1.mlir")
-        dst_path_2 = os.path.join(tmpdir, "ttsme_2.mlir")
+        sme_first_pass = os.path.join(tmpdir, "sme_first_pass.mlir")
+        mlir_sme_pass = os.path.join(tmpdir, "mlir_sme_pass.mlir")
+        sme_first_pass = os.path.join(tmpdir, "sme_second_pass.mlir")
+        output = os.path.join(tmpdir, "output.mlir")
         Path(src_path).write_text(ttsharedir)
         triton_sme_opt_path = _get_triton_SME_path()
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
-        subprocess.check_call([triton_sme_opt_path, src_path, "-sme-conversion","--debug" , "-o", dst_path_1])
-        output_1= Path(dst_path_1).read_text()
-        printc(output_1)
-        # subprocess.check_call([mlir_opt_path, output_1, "--linalg-bufferize", "-o", dst_path_2 , ])
-        # output_2= Path(dst_path_2).read_text()
-        # printc(output_2,"red")
-        output= output_1
+        subprocess.check_call([triton_sme_opt_path, src_path, "-sme-conversion" , "-o", sme_first_pass])
+        printc(Path(sme_first_pass).read_text(),"green")
+        printc(subprocess.check_call([mlir_opt_path, sme_first_pass, "--linalg-bufferize", "-o", mlir_sme_pass ]),"red")
+        printc(Path(mlir_sme_pass).read_text(),"cyan")
+
+
+        subprocess.check_call([triton_sme_opt_path, mlir_sme_pass, "-sme-conversion" , "-o", output])
+        printc(Path(mlir_sme_pass).read_text(),"magenta")
         # subprocess.check_call([mlir_opt_path, dst_path2, "--one-shot-bufferize=allow-unknown-ops", "-o", dst_path])
         # output= Path(dst_path).read_text()
         # if "vector.contract" in output:
@@ -75,7 +78,8 @@ def _optimize_ttsharedir(ttsharedir: str):
         # if output.strip() == pre_outer.strip():
         #     raise Exception("SME conversion failed, output is same as pre_outer.mlir")
         # output = pre_outer
-        return output
+        import sys; sys.exit(0)
+        return Path(output).read_text()
 
 
 def _ttsharedir_to_llir(ttsharedir: str):
@@ -87,37 +91,43 @@ def _ttsharedir_to_llir(ttsharedir: str):
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
         # TritonShared-MLIR to LLVM-MLIR
         subprocess.check_call([mlir_opt_path, ttshared_path,
-            "--convert-linalg-to-affine-loops",
+            "--canonicalize",
             "--eliminate-empty-tensors",
-            "--lower-affine",
             "--convert-linalg-to-loops",
-            "--convert-scf-to-cf",
-            "--convert-cf-to-llvm",
-            "--convert-arith-to-llvm",
-            "--convert-math-to-llvm",
-            "--convert-complex-to-llvm",
-            "--convert-vector-to-llvm",
-            "--convert-index-to-llvm",
-            "--memref-expand",
+            
+            "--empty-tensor-to-alloc-tensor",
+            
             "--expand-strided-metadata",
-            "--finalize-memref-to-llvm",
-            "--convert-func-to-llvm",
-            # Lowering memrefs creates more affine.apply ops.
-            # Lowering these affine ops again creates further arith ops,
-            # so we have to run these two passes again here.
-            "--lower-affine",
-            "--convert-arith-to-llvm",
-            # Remove all unrealized casts created
-            "--reconcile-unrealized-casts",
+            "--convert-vector-to-arm-sme",
+            "--arm-sve-legalize-vector-storage",
+            "--allocate-arm-sme-tiles",
+            "--convert-arm-sme-to-scf",
+            "--convert-vector-to-scf",
+            #"--convert-vector-to-llvm=enable-arm-sve",
+            # "--convert-arith-to-llvm",
+            # "--convert-math-to-llvm",
+            # "--convert-complex-to-llvm",
+            # "--convert-vector-to-llvm",
+            # "--convert-arm-sme-to-llvm",
+            # "--finalize-memref-to-llvm",
+            #"--convert-func-to-llvm",
+            # "--lower-affine",
+            # "--convert-scf-to-cf",
+            # "--convert-cf-to-llvm",
+            # "--convert-arith-to-llvm",
+            #"--convert-index-to-llvm",
             "-o",
             llmlir_path])
-
+        res = Path(llmlir_path).read_text()
+        printc(res, "magenta")
+        
         # LLVM-MLIR to LLVM-IR
         mlir_translate_path = _get_llvm_bin_path("mlir-translate")
         subprocess.check_call([mlir_translate_path, llmlir_path,
             "--mlir-to-llvmir",
             "-o",
             llir_path])
+        
         return Path(llir_path).read_text()
 
 
