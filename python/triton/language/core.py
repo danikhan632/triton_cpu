@@ -109,6 +109,11 @@ def is_builtin(fn) -> bool:
     return getattr(fn, TRITON_BUILTIN, False)
 
 
+@builtin
+def to_tensor(x, _builder=None):
+    return _to_tensor(x, _builder)
+
+
 def _to_tensor(x, builder):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
@@ -307,6 +312,10 @@ class dtype:
     def is_ptr():
         return False
 
+    @staticmethod
+    def is_const():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -388,17 +397,17 @@ class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError('element_ty is a {type(element_ty).__name__}.')
+            raise TypeError(f'element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
         self.address_space = address_space
 
-        self.name = self.__str__()
+        self.name = f'pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
-        return f'pointer<{self.element_ty}>'
+        return self.name
 
     def __repr__(self):
         return self.__str__()
@@ -417,6 +426,23 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+
+class const_pointer_type(pointer_type):
+
+    def __init__(self, element_ty: dtype, address_space: int = 1):
+        super().__init__(element_ty, address_space)
+
+    def __str__(self):
+        return f'const_pointer<{self.element_ty}>'
+
+    def is_const(self):
+        return True
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, const_pointer_type):
+            return False
+        return self.element_ty == other.element_ty and self.address_space == other.address_space
 
 
 class block_type(dtype):
@@ -440,13 +466,13 @@ class block_type(dtype):
         if self.numel > TRITON_MAX_TENSOR_NUMEL:
             raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
-        self.name = self.__str__()
+        self.name = f'<{self.shape}, {self.element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
         return builder.get_block_ty(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
-        return f'<{self.shape}, {self.element_ty}>'
+        return self.name
 
     def __repr__(self):
         return self.__str__()
@@ -509,9 +535,44 @@ float64 = dtype('fp64')
 # pointer types
 pi32_t = pointer_type(int32)
 
+
+def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
+    if bitwidth == 1:
+        return int1
+    elif bitwidth == 8 and signed:
+        return int8
+    elif bitwidth == 8 and not signed:
+        return uint8
+    elif bitwidth == 16 and signed:
+        return int16
+    elif bitwidth == 16 and not signed:
+        return uint16
+    elif bitwidth == 32 and signed:
+        return int32
+    elif bitwidth == 32 and not signed:
+        return uint32
+    elif bitwidth == 64 and signed:
+        return int64
+    elif bitwidth == 64 and not signed:
+        return uint64
+    else:
+        raise ValueError(f'Unsupported bitwidth {bitwidth} and signedness {signed}')
+
+
 # -----------------------
 # constexpr
 # -----------------------
+
+
+class const:
+    """
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
+    """
+    pass
 
 
 class constexpr:
@@ -627,6 +688,9 @@ class constexpr:
 
     def __pow__(self, other):
         return constexpr(self.value**_constexpr_to_value(other))
+
+    def __rpow__(self, other):
+        return constexpr(_constexpr_to_value(other)**self.value)
 
     def __rshift__(self, other):
         return constexpr(self.value >> _constexpr_to_value(other))
@@ -1931,7 +1995,7 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None
 # -----------------------
 
 
-def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
+def _add_scan_docstr(name: str) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2361,7 +2425,13 @@ class range:
     :param arg1: the start value.
     :param arg2: the end value.
     :param step: the step value.
-    :param num_warps: the num_warps used by pipeliner value.
+    :param num_stages: pipeline the loop into this many stages (so there are
+        :code:`num_stages` iterations of the loop in flight at once).
+
+        Note this is subtly different than passing :code:`num_stages` as a
+        kernel argument.  The kernel argument only pipelines loads that feed
+        into :code:`dot` operations, while this attribute tries to pipeline most
+        (though not all) loads in this loop.
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None):
