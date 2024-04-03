@@ -64,22 +64,28 @@ def _optimize_ttsharedir(ttsharedir: str):
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
         subprocess.check_call([triton_sme_opt_path, src_path, "-sme-conversion" , "-o", sme_first_pass])
         printc(Path(sme_first_pass).read_text(),"green")
-        printc(subprocess.check_call([mlir_opt_path, sme_first_pass, "--linalg-bufferize", "-o", mlir_sme_pass ]),"red")
+        subprocess.check_call([mlir_opt_path, sme_first_pass,
+        "--canonicalize", 
+            "--eliminate-empty-tensors",
+            "--convert-linalg-to-loops",
+            "--empty-tensor-to-alloc-tensor",
+            "--expand-strided-metadata",
+            "--arm-sme-vector-legalization",
+            "--convert-vector-to-arm-sme",
+            "--convert-arith-to-arm-sme",
+            "--arm-sme-outer-product-fusion", 
+            "--arm-sve-legalize-vector-storage",
+            "--allocate-arm-sme-tiles",
+            "--convert-arm-sme-to-scf",
+            "--convert-vector-to-scf",
+ 
+            "-o",
+            mlir_sme_pass])
         printc(Path(mlir_sme_pass).read_text(),"cyan")
 
 
-        subprocess.check_call([triton_sme_opt_path, mlir_sme_pass, "-sme-conversion" , "-o", output])
-        printc(Path(mlir_sme_pass).read_text(),"magenta")
-        # subprocess.check_call([mlir_opt_path, dst_path2, "--one-shot-bufferize=allow-unknown-ops", "-o", dst_path])
-        # output= Path(dst_path).read_text()
-        # if "vector.contract" in output:
-        #     raise Exception("SME conversion failed, vector.contract found in output")
-
-        # if output.strip() == pre_outer.strip():
-        #     raise Exception("SME conversion failed, output is same as pre_outer.mlir")
-        # output = pre_outer
-        import sys; sys.exit(0)
-        return Path(output).read_text()
+    
+        return Path(mlir_sme_pass).read_text()
 
 
 def _ttsharedir_to_llir(ttsharedir: str):
@@ -91,31 +97,19 @@ def _ttsharedir_to_llir(ttsharedir: str):
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
         # TritonShared-MLIR to LLVM-MLIR
         subprocess.check_call([mlir_opt_path, ttshared_path,
-            "--canonicalize",
-            "--eliminate-empty-tensors",
-            "--convert-linalg-to-loops",
-            
-            "--empty-tensor-to-alloc-tensor",
-            
-            "--expand-strided-metadata",
-            "--convert-vector-to-arm-sme",
-            "--arm-sve-legalize-vector-storage",
-            "--allocate-arm-sme-tiles",
-            "--convert-arm-sme-to-scf",
-            "--convert-vector-to-scf",
-            #"--convert-vector-to-llvm=enable-arm-sve",
-            # "--convert-arith-to-llvm",
-            # "--convert-math-to-llvm",
-            # "--convert-complex-to-llvm",
-            # "--convert-vector-to-llvm",
-            # "--convert-arm-sme-to-llvm",
-            # "--finalize-memref-to-llvm",
-            #"--convert-func-to-llvm",
-            # "--lower-affine",
-            # "--convert-scf-to-cf",
-            # "--convert-cf-to-llvm",
-            # "--convert-arith-to-llvm",
-            #"--convert-index-to-llvm",
+
+            "--convert-vector-to-llvm=enable-arm-sve",
+            "--convert-arith-to-llvm",
+            "--convert-math-to-llvm",
+            "--convert-complex-to-llvm",
+            "--convert-vector-to-llvm",
+            "--convert-arm-sme-to-llvm",
+            "--finalize-memref-to-llvm",
+            "--convert-func-to-llvm",
+            "--lower-affine",
+            "--convert-cf-to-llvm",
+            "--convert-arith-to-llvm",
+            "--convert-index-to-llvm",
             "-o",
             llmlir_path])
         res = Path(llmlir_path).read_text()
@@ -124,7 +118,7 @@ def _ttsharedir_to_llir(ttsharedir: str):
         # LLVM-MLIR to LLVM-IR
         mlir_translate_path = _get_llvm_bin_path("mlir-translate")
         subprocess.check_call([mlir_translate_path, llmlir_path,
-            "--mlir-to-llvmir",
+            "--mlir-to-llvmir", "--debug",
             "-o",
             llir_path])
         

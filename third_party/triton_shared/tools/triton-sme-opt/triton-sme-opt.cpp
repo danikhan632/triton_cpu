@@ -286,7 +286,7 @@ struct MatmulTileConversion : public OpRewritePattern<linalg::MatmulOp> {
           Value tileN = b.create<arith::ConstantIndexOp>(loc, 4);
           Value tileNScaled = b.create<arith::MulIOp>(loc, tileN, vscale);
           sizes.push_back(tileNScaled);
-          Value tileK = b.create<arith::ConstantIndexOp>(loc, 1);
+          Value tileK = b.create<arith::ConstantIndexOp>(loc, 2);
           sizes.push_back(tileK);
 
           return sizes;
@@ -299,7 +299,7 @@ struct MatmulTileConversion : public OpRewritePattern<linalg::MatmulOp> {
       return failure();
     }
 
-    SmallVector<int64_t, 4> inputVectorSizes = {enableSME ? 4 : 2, 4, 1};
+    SmallVector<int64_t, 4> inputVectorSizes = {enableSME ? 4 : 2, 4, 2};
     SmallVector<bool, 4> inputScalableVecDims = {enableSME, true, false};
 
     if (failed(linalg::vectorize(
