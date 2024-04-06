@@ -63,22 +63,28 @@ def _optimize_ttsharedir(ttsharedir: str):
         triton_sme_opt_path = _get_triton_SME_path()
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
         subprocess.check_call([triton_sme_opt_path, src_path, "-sme-conversion" , "-o", sme_first_pass])
-        printc(Path(sme_first_pass).read_text(),"green")
+        
+        # printc(Path(sme_first_pass).read_text(),"green")
+        
         subprocess.check_call([mlir_opt_path, sme_first_pass,
         "--canonicalize", 
+        "--one-shot-bufferize=allow-return-allocs-from-loops=true",
             "--eliminate-empty-tensors",
             "--convert-linalg-to-loops",
+            "--lower-affine",
             "--empty-tensor-to-alloc-tensor",
             "--expand-strided-metadata",
             "--arm-sme-vector-legalization",
             "--convert-vector-to-arm-sme",
-            "--convert-arith-to-arm-sme",
-            "--arm-sme-outer-product-fusion", 
+            "--arm-sme-outer-product-fusion",
             "--arm-sve-legalize-vector-storage",
+            "--convert-arith-to-arm-sme",
             "--allocate-arm-sme-tiles",
             "--convert-arm-sme-to-scf",
-            "--convert-vector-to-scf",
- 
+            "--convert-vector-to-scf=full-unroll",
+            "--convert-arith-to-arm-sme",
+            "--convert-arith-to-llvm",
+            
             "-o",
             mlir_sme_pass])
         printc(Path(mlir_sme_pass).read_text(),"cyan")
@@ -91,26 +97,68 @@ def _optimize_ttsharedir(ttsharedir: str):
 def _ttsharedir_to_llir(ttsharedir: str):
     with tempfile.TemporaryDirectory() as tmpdir:
         ttshared_path = os.path.join(tmpdir, "ttshared.mlir")
-        llmlir_path = os.path.join(tmpdir, "ll.mlir")
+        llmlir_path = os.path.join("/home/green/code/triton-cpu/extras/kernels/ll.mlir")
         llir_path = os.path.join(tmpdir, "ll.ir")
         Path(ttshared_path).write_text(ttsharedir)
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
         # TritonShared-MLIR to LLVM-MLIR
-        subprocess.check_call([mlir_opt_path, ttshared_path,
-
-            "--convert-vector-to-llvm=enable-arm-sve",
+        if  _get_triton_SME_path() == "":
+            subprocess.check_call([mlir_opt_path, ttshared_path,
+            "--convert-linalg-to-affine-loops",
+            "--eliminate-empty-tensors",
+            "--empty-tensor-to-alloc-tensor",
+            "--one-shot-bufferize=allow-return-allocs-from-loops=true",
+            "--lower-affine",
+            "--convert-linalg-to-loops",
+            "--convert-scf-to-cf",
+            "--convert-cf-to-llvm",
             "--convert-arith-to-llvm",
             "--convert-math-to-llvm",
             "--convert-complex-to-llvm",
             "--convert-vector-to-llvm",
+            "--convert-index-to-llvm",
+            "--memref-expand",
+            "--expand-strided-metadata",
+            "--finalize-memref-to-llvm",
+            "--convert-func-to-llvm",
+            # Lowering memrefs creates more affine.apply ops.
+            # Lowering these affine ops again creates further arith ops,
+            # so we have to run these two passes again here.
+            "--lower-affine",
+            # "--convert-arith-to-llvm",
+            # Remove all unrealized casts created
+            "--reconcile-unrealized-casts",
+            # "--debug",
+            "-o",
+            llmlir_path])
+
+            # "--convert-vector-to-llvm=enable-arm-sve",
+            # "--convert-arm-sme-to-llvm",
+        else:
+            subprocess.check_call([mlir_opt_path, ttshared_path,
+            "--canonicalize",
+            "--eliminate-empty-tensors",
+            "--convert-linalg-to-loops",
+            "--lower-affine",
+            "--convert-scf-to-cf",
+            "--convert-cf-to-llvm", 
+             
+            "--convert-vector-to-llvm=enable-arm-sve",
             "--convert-arm-sme-to-llvm",
+            "--convert-math-to-llvm",
+            "--convert-complex-to-llvm",
+            "--convert-index-to-llvm",
+            "--memref-expand",
+            
+            "--expand-strided-metadata",
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
             "--lower-affine",
-            "--convert-cf-to-llvm",
             "--convert-arith-to-llvm",
-            "--convert-index-to-llvm",
-            "-o",
+            # Remove all unrealized casts created
+            "--reconcile-unrealized-casts",
+            # "--debug",
+            "-o", 
             llmlir_path])
         res = Path(llmlir_path).read_text()
         printc(res, "magenta")
@@ -118,7 +166,9 @@ def _ttsharedir_to_llir(ttsharedir: str):
         # LLVM-MLIR to LLVM-IR
         mlir_translate_path = _get_llvm_bin_path("mlir-translate")
         subprocess.check_call([mlir_translate_path, llmlir_path,
-            "--mlir-to-llvmir", "--debug",
+            "--mlir-to-llvmir", 
+            
+            # "--debug",
             "-o",
             llir_path])
         
@@ -140,7 +190,7 @@ def _llir_to_bin(llir: str, metadata):
         dst_path = os.path.join(tmpdir, "kernel.o")
         Path(src_path).write_text(llir)
         llc_path = _get_llvm_bin_path("llc")
-        subprocess.check_call([llc_path, src_path, "-o", dst_path])
+        subprocess.check_call(["/usr/bin/qemu-aarch64-static","/home/green/code/triton-cpu/python/llc", src_path, "--mattr=+sve,+sme","-o", dst_path])
         # Actually it's text-format assembly.  Use read_text().
         return Path(dst_path).read_text()
 
