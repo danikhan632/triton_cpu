@@ -20,6 +20,14 @@ if(NOT WIN32)
 endif()
 
 
+# Default build type
+if(NOT CMAKE_BUILD_TYPE)
+  message(STATUS "Default build type: Debug")
+  set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+else()
+  message(WARNING "Overriding specified build type (${CMAKE_BUILD_TYPE}) with Debug")
+  set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+endif()
 
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)

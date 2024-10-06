@@ -37,163 +37,6 @@ namespace matmul_conversion {
 
 
 
-struct PrefetchingPass : public PassWrapper<PrefetchingPass, OperationPass<func::FuncOp>> {
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<affine::AffineDialect, arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect>();
-  }
-
-  void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
-    RewritePatternSet patterns(&getContext());
-    populatePrefetchingPatterns(patterns);
-    (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
-  }
-
-  void populatePrefetchingPatterns(RewritePatternSet &patterns) {
-    patterns.add<InsertPrefetchingPattern>(&getContext());
-  }
-
-  class InsertPrefetchingPattern : public OpRewritePattern<scf::ForOp> {
-  public:
-    using OpRewritePattern<scf::ForOp>::OpRewritePattern;
-
-    LogicalResult matchAndRewrite(scf::ForOp forOp, PatternRewriter &rewriter) const override {
-      // Check if the loop nest has the expected structure
-      if (!hasExpectedLoopStructure(forOp))
-        return failure();
-
-      // // Insert prefetching before the innermost loop nest
-      // insertPrefetchingBeforeInnerLoop(forOp, rewriter);
-
-      // // Insert prefetching inside the innermost loop nest
-      // insertPrefetchingInsideInnerLoop(forOp, rewriter);
-
-      // // Insert prefetching before the final memref.copy operation
-      // insertPrefetchingBeforeCopy(forOp, rewriter);
-
-      return success();
-    }
-
-  private:
-
-
-    bool hasExpectedLoopStructure(scf::ForOp forOp) const {
-      // Check if the loop nest has the expected structure
-      // In this example, we expect three nested scf::ForOp loops
-      if (forOp.getBody()->getOperations().size() != 1)
-        return false;
-
-      auto innerForOp = dyn_cast<scf::ForOp>(forOp.getBody()->getOperations().front());
-      if (!innerForOp || innerForOp.getBody()->getOperations().size() != 1)
-        return false;
-
-      auto innerMostForOp = dyn_cast<scf::ForOp>(innerForOp.getBody()->getOperations().front());
-      if (!innerMostForOp)
-        return false;
-
-      return true;
-    }
-
-    // void insertPrefetchingBeforeInnerLoop(scf::ForOp forOp, PatternRewriter &rewriter) const {
-    //   auto innerForOp = dyn_cast<scf::ForOp>(forOp.getBody()->getOperations().front());
-    //   auto innerMostForOp = dyn_cast<scf::ForOp>(innerForOp.getBody()->getOperations().front());
-
-    //   OpBuilder::InsertionGuard guard(rewriter);
-    //   rewriter.setInsertionPoint(innerMostForOp);
-
-    //   // Get the memref operands for prefetching
-    //   auto memrefA = innerMostForOp.getOperand(0);
-    //   auto memrefB = innerMostForOp.getOperand(1);
-
-    //   // Create constants for prefetch distance and indices
-    //   auto prefetchDistance = rewriter.create<arith::ConstantIndexOp>(innerMostForOp.getLoc(), 2);
-    //   auto zeroIndex = rewriter.create<arith::ConstantIndexOp>(innerMostForOp.getLoc(), 0);
-
-    //   // Create affine expressions for prefetch offsets
-    //   auto dimExpr0 = rewriter.getAffineDimExpr(0);
-    //   auto dimExpr1 = rewriter.getAffineDimExpr(1);
-    //   auto distanceExpr = rewriter.getAffineSymbolExpr(0);
-
-    //   // Calculate prefetch offsets
-    //   auto prefetchOffsetA = rewriter.create<mlir::affine::AffineApplyOp>(
-    //       innerMostForOp.getLoc(),
-    //       AffineMap::get(3, 1, {dimExpr0, dimExpr1, distanceExpr}, rewriter.getContext()),
-    //       ValueRange{innerMostForOp.getInductionVar(), innerForOp.getInductionVar(), prefetchDistance});
-    //   auto prefetchOffsetB = rewriter.create<mlir::affine::AffineApplyOp>(
-    //       innerMostForOp.getLoc(),
-    //       AffineMap::get(3, 1, {distanceExpr, dimExpr0, dimExpr1}, rewriter.getContext()),
-    //       ValueRange{prefetchDistance, innerMostForOp.getInductionVar(), innerForOp.getInductionVar()});
-
-    //   // Create memref.prefetch operations
-    //   rewriter.create<memref::PrefetchOp>(innerMostForOp.getLoc(), memrefA, prefetchOffsetA,
-    //                                       /*isWrite=*/false, /*localityHint=*/0, /*isDataCache=*/true);
-    //   rewriter.create<memref::PrefetchOp>(innerMostForOp.getLoc(), memrefB, prefetchOffsetB,
-    //                                       /*isWrite=*/false, /*localityHint=*/0, /*isDataCache=*/true);
-    // }
-
-    // void insertPrefetchingInsideInnerLoop(scf::ForOp forOp, PatternRewriter &rewriter) const {
-    //   auto innerForOp = dyn_cast<scf::ForOp>(forOp.getBody()->getOperations().front());
-    //   auto innerMostForOp = dyn_cast<scf::ForOp>(innerForOp.getBody()->getOperations().front());
-
-    //   OpBuilder::InsertionGuard guard(rewriter);
-    //   rewriter.setInsertionPointToEnd(innerMostForOp.getBody());
-
-    //   // Get the memref operands for prefetching
-    //   auto memrefA = innerMostForOp.getOperand(0);
-    //   auto memrefB = innerMostForOp.getOperand(1);
-
-    //   // Create constants for prefetch distance and indices
-    //   auto prefetchDistance = rewriter.create<arith::ConstantIndexOp>(innerMostForOp.getLoc(), 2);
-    //   auto zeroIndex = rewriter.create<arith::ConstantIndexOp>(innerMostForOp.getLoc(), 0);
-
-    //   // Create affine expressions for prefetch offsets
-    //   auto dimExpr0 = rewriter.getAffineDimExpr(0);
-    //   auto dimExpr1 = rewriter.getAffineDimExpr(1);
-    //   auto distanceExpr = rewriter.getAffineSymbolExpr(0);
-
-    //   // Calculate prefetch offsets
-    //   auto prefetchOffsetA = rewriter.create<mlir::affine::AffineApplyOp>(
-    //       innerMostForOp.getLoc(),
-    //       AffineMap::get(3, 1, {dimExpr0, dimExpr1, distanceExpr}, rewriter.getContext()),
-    //       ValueRange{innerMostForOp.getInductionVar(), innerForOp.getInductionVar(), prefetchDistance});
-    //   auto prefetchOffsetB = rewriter.create<mlir::affine::AffineApplyOp>(
-    //       innerMostForOp.getLoc(),
-    //       AffineMap::get(3, 1, {distanceExpr, dimExpr0, dimExpr1}, rewriter.getContext()),
-    //       ValueRange{prefetchDistance, innerMostForOp.getInductionVar(), innerForOp.getInductionVar()});
-
-    //   // Create memref.prefetch operations
-    //   rewriter.create<memref::PrefetchOp>(innerMostForOp.getLoc(), memrefA, prefetchOffsetA,
-    //                                       /*isWrite=*/false, /*localityHint=*/0, /*isDataCache=*/true);
-    //   rewriter.create<memref::PrefetchOp>(innerMostForOp.getLoc(), memrefB, prefetchOffsetB,
-    //                                       /*isWrite=*/false, /*localityHint=*/0, /*isDataCache=*/true);
-    // }
-
-    void insertPrefetchingBeforeCopy(scf::ForOp forOp, PatternRewriter &rewriter) const {
-      auto copyOp = forOp.getBody()->getTerminator()->getPrevNode();
-      if (!isa<memref::CopyOp>(copyOp))
-        return;
-
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPoint(copyOp);
-
-      // Get the memref operand for prefetching
-      auto memref = cast<memref::CopyOp>(copyOp).getTarget();
-
-      // Create constants for prefetch indices
-      auto zeroIndex = rewriter.create<arith::ConstantIndexOp>(copyOp->getLoc(), 0);
-
-      // Create memref.prefetch operation
-      rewriter.create<memref::PrefetchOp>(copyOp->getLoc(), memref, ValueRange{zeroIndex},
-                                          /*isWrite=*/true, /*localityHint=*/0, /*isDataCache=*/true);
-    }
-  
-  
-  
-  };
-};
-
-
-
 
 
 
@@ -400,9 +243,7 @@ struct OuterProductVectorizationPass
   std::unique_ptr<Pass> createOuterProductVectorizationPass() {
     return std::make_unique<OuterProductVectorizationPass>();
   }
-  std::unique_ptr<Pass> createPrefetchPass() {
-    return std::make_unique<PrefetchingPass>();
-  }
+
   std::unique_ptr<Pass> createMatmulTileConversionPass(bool enableSME) {
     return std::make_unique<MatmulTileConversionPass>(enableSME);
   }
@@ -453,12 +294,6 @@ int main(int argc, char **argv) {
         pm.addPass(matmul_conversion::createOuterProductVectorizationPass());
       });
 
-  PassPipelineRegistration<> prefConversionPipeline(
-      "prefetch",
-      "Converts linalg.matmul to a more optimized form using SME",
-      [](OpPassManager &pm) {
-        pm.addPass(matmul_conversion::createPrefetchPass());
-      });
 
 
 

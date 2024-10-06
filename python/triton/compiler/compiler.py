@@ -61,7 +61,7 @@ ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
     "ttgir": mlir_arg_type_pattern,
-    "ptx": ptx_arg_type_pattern,
+    "ptx": ptx_arg_type_pattern
 }
 
 
