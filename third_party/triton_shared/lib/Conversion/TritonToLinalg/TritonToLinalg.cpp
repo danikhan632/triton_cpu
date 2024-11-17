@@ -337,6 +337,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
     auto ptr = adaptor.getPtr();
     auto mask = op.getMask();
     auto other = op.getOther();

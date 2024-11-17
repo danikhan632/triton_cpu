@@ -41,13 +41,16 @@ def _get_llvm_bin_path(bin_name: str) -> str:
 
 def _ttir_to_ttsharedir(mod):
     # Get Triton-MLIR as string
+    
     ttir_code = str(mod)
+    print(ttir_code)
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "tt.mlir")
         dst_path = os.path.join(tmpdir, "ttshared.mlir")
         Path(src_path).write_text(ttir_code)
         triton_shared_opt_path = _get_triton_shared_opt_path()
         subprocess.check_call([triton_shared_opt_path, src_path, "--canonicalize", "--triton-to-linalg", "--cse", "-o", dst_path])
+        printc(Path(src_path).read_text(),'green')
         foo = Path(dst_path).read_text()
         printc(foo)
         return foo
