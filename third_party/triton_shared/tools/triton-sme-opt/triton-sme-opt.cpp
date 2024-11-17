@@ -194,95 +194,6 @@ private:
 };
 
 
-struct ReplaceAllocAndAdjustDerivedMemRefPass
-    : public PassWrapper<ReplaceAllocAndAdjustDerivedMemRefPass,
-                         OperationPass<func::FuncOp>> {
-  void runOnOperation() override {
-    func::FuncOp func = getOperation();
-
-    // First, collect all alloc operations to be replaced.
-    SmallVector<memref::AllocOp, 16> allocOps;
-    func.walk([&](memref::AllocOp allocOp) {
-      allocOps.push_back(allocOp);
-    });
-
-    // Replace alloc operations.
-    for (auto allocOp : allocOps) {
-      replaceAllocOp(allocOp);
-    }
-
-    // Adjust derived memref types.
-    func.walk([&](Operation *op) {
-      // List of operations that derive memrefs from memrefs.
-      if (auto subviewOp = dyn_cast<memref::SubViewOp>(op)) {
-        adjustMemRefType(subviewOp.getSource(), subviewOp.getResult());
-      } else if (auto castOp = dyn_cast<memref::CastOp>(op)) {
-        adjustMemRefType(castOp.getSource(), castOp.getResult());
-      } else if (auto reshapeOp = dyn_cast<memref::ReshapeOp>(op)) {
-        adjustMemRefType(reshapeOp.getSource(), reshapeOp.getResult());
-      } else if (auto collapseShapeOp = dyn_cast<memref::CollapseShapeOp>(op)) {
-        adjustMemRefType(collapseShapeOp.getSrc(), collapseShapeOp.getResult());
-      } else if (auto expandShapeOp = dyn_cast<memref::ExpandShapeOp>(op)) {
-        adjustMemRefType(expandShapeOp.getSrc(), expandShapeOp.getResult());
-      }
-      // Add other operations as needed.
-    });
-  }
-
-  void replaceAllocOp(memref::AllocOp allocOp) {
-    // Get the memref type from the alloc operation.
-    auto memrefType = allocOp.getType().cast<MemRefType>();
-
-    // Check if the memref is already in the desired memory space.
-    if (memrefType.getMemorySpaceAsInt() == 1)
-      return;
-
-    // Create a new memref type with memory space set to 1.
-    auto newMemRefType = MemRefType::get(
-        memrefType.getShape(), memrefType.getElementType(),
-        memrefType.getLayout(),
-        IntegerAttr::get(IntegerType::get(&getContext(), 64), 1));
-
-    // Create a new alloc operation with the new memref type.
-    OpBuilder builder(allocOp);
-    auto newAllocOp = builder.create<memref::AllocOp>(
-        allocOp.getLoc(), newMemRefType, allocOp.getDynamicSizes(),
-        allocOp.getSymbolOperands(), allocOp.getAlignmentAttr());
-
-    // Replace all uses of the old alloc's result with the new alloc's result.
-    allocOp.getResult().replaceAllUsesWith(newAllocOp.getResult());
-
-    // Remove the old alloc operation.
-    allocOp.erase();
-  }
-
-  void adjustMemRefType(Value sourceMemRef, Value resultMemRef) {
-    auto sourceType = sourceMemRef.getType().dyn_cast<MemRefType>();
-    auto resultType = resultMemRef.getType().dyn_cast<MemRefType>();
-
-    if (!sourceType || !resultType)
-      return;
-
-    // Check if the source memref is in memory space 1.
-    if (sourceType.getMemorySpaceAsInt() != 1)
-      return;
-
-    // If the result type already has memory space 1, no action is needed.
-    if (resultType.getMemorySpaceAsInt() == 1)
-      return;
-
-    // Create a new memref type for the result with memory space 1.
-    auto newResultType = MemRefType::get(
-        resultType.getShape(), resultType.getElementType(),
-        resultType.getLayout(),
-        IntegerAttr::get(IntegerType::get(&getContext(), 64), 1));
-
-    // Set the result type.
-    resultMemRef.setType(newResultType);
-  }
-};
-
-
 struct OuterProductVectorizationPass
     : public PassWrapper<OuterProductVectorizationPass,
                           OperationPass<func::FuncOp>> {
@@ -343,10 +254,6 @@ struct OuterProductVectorizationPass
     return std::make_unique<OneShotBufferizationPass>();
   }
 
-  std::unique_ptr<Pass> createReplaceAllocAndAdjustDerivedMemRefPass() {
-    return std::make_unique<ReplaceAllocAndAdjustDerivedMemRefPass>();
-  }
-
 
 
 
@@ -372,16 +279,6 @@ int main(int argc, char **argv) {
 
 
 
-  PassPipelineRegistration<> localConversionPipeline(
-      "local-mem-conversion",
-      "Converts local to a more optimized form using SME",
-      [](OpPassManager &pm) {
-        
-
-
-       pm.addPass(matmul_conversion::createReplaceAllocAndAdjustDerivedMemRefPass());
-        
-      });
 
 
   PassPipelineRegistration<> smeConversionPipeline(
