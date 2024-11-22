@@ -21,241 +21,180 @@
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"
 #include "mlir/Dialect/Linalg/TransformOps/LinalgTransformOps.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Pass/Pass.h"
+
+
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Pass/Pass.h"
+
 
 using namespace mlir;
 
+
+
 namespace matmul_conversion {
 
-class SharedMemoryPass
-    : public PassWrapper<SharedMemoryPass, OperationPass<ModuleOp>> {
-public:
-  StringRef getArgument() const final { return "shared-mem-alloc"; }
+static constexpr uint64_t SHARED_MEMORY_BASE = 0xFFFFF0000000000;
+static uint64_t currentSharedMemoryOffset = 0;
+
+// Helper function to get the next shared memory address
+static uint64_t getNextSharedMemoryAddress(uint64_t size) {
+  size = (size + 7) & ~7;
+  uint64_t address = SHARED_MEMORY_BASE + currentSharedMemoryOffset;
+  currentSharedMemoryOffset += size;
+  return address;
+}
+
+// Helper function to calculate memref size in bytes
+static uint64_t getMemRefSizeInBytes(mlir::MemRefType type) {
+  uint64_t size = 1;
+  for (auto dim : type.getShape()) {
+    size *= dim;
+  }
+  return size * type.getElementTypeBitWidth() / 8;
+}
+
+// Helper to create memory space attribute
+static mlir::Attribute getSharedMemorySpaceAttr(mlir::MLIRContext* ctx, uint64_t address) {
+  return mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 64), address);
+}
+
+
+
+struct ReplaceAllocWithGlobalPattern : public mlir::OpRewritePattern<mlir::memref::AllocOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult matchAndRewrite(mlir::memref::AllocOp allocOp,
+                                    mlir::PatternRewriter &rewriter) const override {
+    auto loc = allocOp.getLoc();
+    auto memrefType = allocOp.getType();
+    
+    // Skip if already processed
+    if (memrefType.getMemorySpace() || allocOp->hasAttr("shared_memory")) {
+      return mlir::failure();
+    }
+
+    // Get module operation to insert globals
+    auto moduleOp = allocOp->getParentOfType<mlir::ModuleOp>();
+    if (!moduleOp) {
+      return mlir::failure();
+    }
+
+    // Calculate size and address
+    uint64_t size = getMemRefSizeInBytes(memrefType);
+    uint64_t address = getNextSharedMemoryAddress(size);
+
+    std::string globalName = "shared_mem_" + std::to_string(address);
+
+    // Create shared memory type
+    auto sharedType = mlir::MemRefType::get(
+        memrefType.getShape(),
+        memrefType.getElementType(),
+        memrefType.getLayout(),
+        getSharedMemorySpaceAttr(getContext(), address));
+
+    // Check if global exists
+  if (!moduleOp.lookupSymbol(globalName)) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
   
-  StringRef getDescription() const final {
-    return "Convert memref.alloc ops to shared memory allocations starting at 0xffff";
-  }
-  
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<memref::MemRefDialect, LLVM::LLVMDialect, scf::SCFDialect>();
-  }
+  // Create global with simpler builder signature
+  auto globalOp = rewriter.create<mlir::memref::GlobalOp>(
+      loc,
+      rewriter.getStringAttr(globalName),     // sym_name
+      rewriter.getStringAttr("private"),      // sym_visibility 
+      mlir::TypeAttr::get(sharedType),        // type
+      nullptr,                                // initial_value
+      rewriter.getUnitAttr(),                 // constant
+      nullptr                                 // alignment
+  );
 
-private:
-  // Convert a memref type to use shared memory space
-  MemRefType getSharedMemoryType(Type type) {
-    if (auto memrefType = type.dyn_cast<MemRefType>()) {
-      return MemRefType::get(
-          memrefType.getShape(),
-          memrefType.getElementType(),
-          memrefType.getLayout(),
-          IntegerAttr::get(IntegerType::get(memrefType.getContext(), 32), 3));
-    }
-    return type.cast<MemRefType>();
-  }
+  // Add attributes after creation
+  globalOp->setAttr("shared_memory", rewriter.getUnitAttr());
+  globalOp->setAttr("shared_memory_size", rewriter.getI64IntegerAttr(size));
+  globalOp->setAttr("shared_memory_address", rewriter.getI64IntegerAttr(address));
+}
 
-  bool updateMemRefTypes(Operation* op) {
-    bool changed = false;
-    
-    // Update result types
-    for (Value result : op->getResults()) {
-      Type resultType = result.getType();
-      if (auto memrefType = resultType.dyn_cast<MemRefType>()) {
-        if (!memrefType.getMemorySpace() || 
-            memrefType.getMemorySpace().cast<IntegerAttr>().getInt() != 3) {
-          auto newType = getSharedMemoryType(memrefType);
-          result.setType(newType);
-          changed = true;
-        }
-      }
-    }
-    
-    // Update operand types if needed
-    for (OpOperand &operand : op->getOpOperands()) {
-      Type operandType = operand.get().getType();
-      if (auto memrefType = operandType.dyn_cast<MemRefType>()) {
-        if (!memrefType.getMemorySpace() ||
-            memrefType.getMemorySpace().cast<IntegerAttr>().getInt() != 3) {
-          auto newType = getSharedMemoryType(memrefType);
-          operand.get().setType(newType);
-          changed = true;
-        }
-      }
-    }
-    
-    return changed;
-  }
+    // Replace alloc with get_global
+    auto getGlobalOp = rewriter.create<mlir::memref::GetGlobalOp>(
+        loc, 
+        sharedType, 
+        globalName);
 
-  void processOperation(Operation* op) {
-    // First process nested regions
-    for (Region &region : op->getRegions()) {
-      for (Block &block : region) {
-        for (Operation &nestedOp : block) {
-          processOperation(&nestedOp);
-        }
-      }
-    }
+    // Create memory space cast
+    auto spaceCast = rewriter.create<mlir::memref::MemorySpaceCastOp>(
+        loc,
+        memrefType,
+        getGlobalOp);
 
-    if (auto subviewOp = dyn_cast<memref::SubViewOp>(op)) {
-      // Handle subview operations
-      auto sourceType = subviewOp.getSource().getType().cast<MemRefType>();
-      if (sourceType.getMemorySpace() && 
-          sourceType.getMemorySpace().cast<IntegerAttr>().getInt() == 3) {
-        // Create new result type with shared memory space
-        auto currentType = subviewOp.getType().cast<MemRefType>();
-        auto newType = MemRefType::get(
-            currentType.getShape(),
-            currentType.getElementType(),
-            currentType.getLayout(),
-            sourceType.getMemorySpace());
-        
-        // Create new subview operation
-        OpBuilder builder(subviewOp);
-        auto newSubview = builder.create<memref::SubViewOp>(
-            subviewOp.getLoc(),
-            newType,
-            subviewOp.getSource(),
-            subviewOp.getMixedOffsets(),
-            subviewOp.getMixedSizes(),
-            subviewOp.getMixedStrides());
-            
-        // Replace old subview with new one
-        subviewOp->replaceAllUsesWith(newSubview.getOperation());
-        subviewOp->erase();
-      }
-    } else if (auto allocOp = dyn_cast<memref::AllocOp>(op)) {
-      // Handle allocation operations
-      if (!allocOp->hasAttr("shared_mem_processed")) {
-        auto memrefType = allocOp.getType();
-        auto newType = getSharedMemoryType(memrefType);
-        
-        OpBuilder builder(allocOp);
-        auto newAlloc = builder.create<memref::AllocOp>(
-            allocOp.getLoc(),
-            newType,
-            allocOp.getDynamicSizes(),
-            allocOp.getAlignmentAttr());
-            
-        allocOp.getResult().replaceAllUsesWith(newAlloc.getResult());
-        allocOp->setAttr("shared_mem_processed", 
-                        builder.getUnitAttr());
-        allocOp->erase();
-      }
-    } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      // Handle scf.for operations
-      bool needsUpdate = false;
-      SmallVector<Type, 4> newResultTypes;
-      SmallVector<Value, 4> newInitArgs;
-      
-      // Check and update types
-      for (auto [initArg, regionArg] : llvm::zip(forOp.getInitArgs(), 
-                                                forOp.getRegionIterArgs())) {
-        Type initType = initArg.getType();
-        if (auto memrefType = initType.dyn_cast<MemRefType>()) {
-          auto newType = getSharedMemoryType(memrefType);
-          if (newType != memrefType) {
-            needsUpdate = true;
-            newResultTypes.push_back(newType);
-            newInitArgs.push_back(initArg);
-            continue;
-          }
-        }
-        newResultTypes.push_back(initType);
-        newInitArgs.push_back(initArg);
-      }
-      
-      // Update for operation if needed
-      if (needsUpdate) {
-        OpBuilder builder(forOp);
-        auto newForOp = builder.create<scf::ForOp>(
-            forOp.getLoc(),
-            forOp.getLowerBound(),
-            forOp.getUpperBound(),
-            forOp.getStep(),
-            newInitArgs);
-            
-        // Move body to new operation
-        newForOp.getRegion().takeBody(forOp.getRegion());
-        
-        // Update result types
-        for (auto [oldResult, newType] : 
-             llvm::zip(forOp.getResults(), newResultTypes)) {
-          oldResult.setType(newType);
-        }
-        
-        forOp->erase();
-      }
-    }
-    
-    // Update types for the current operation
-    updateMemRefTypes(op);
-  }
-
-  void runOnOperation() override {
-    auto module = getOperation();
-    
-    // Process all operations in the module
-    for (Operation &op : module.getOps()) {
-      processOperation(&op);
-    }
+    rewriter.replaceOp(allocOp, spaceCast.getResult());
+    return mlir::success();
   }
 };
 
 
-std::unique_ptr<Pass> createSharedMemoryPass() {
-  return std::make_unique<SharedMemoryPass>();
-}
 
 
-std::unique_ptr<Pass> createSharedMemoryAllocPass() {
-  return std::make_unique<SharedMemoryPass>();
-}
+struct ReplaceCastPattern : public mlir::OpRewritePattern<mlir::memref::CastOp> {
+  using OpRewritePattern::OpRewritePattern;
 
-struct AddLocalMemAttributePass
-    : public PassWrapper<AddLocalMemAttributePass, OperationPass<ModuleOp>> {
-  
-  StringRef getArgument() const final { return "add-local-mem-attr"; }
-  StringRef getDescription() const final { 
-    return "Add local_mem attribute to memref.alloc operations"; 
-  }
+  mlir::LogicalResult matchAndRewrite(mlir::memref::CastOp castOp,
+                                    mlir::PatternRewriter &rewriter) const override {
+    auto source = castOp.getSource();
+    auto sourceType = source.getType().dyn_cast<mlir::MemRefType>();
+    auto resultType = castOp.getType().dyn_cast<mlir::MemRefType>();
+    
+    if (!sourceType || !resultType) {
+      return mlir::failure();
+    }
 
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<memref::MemRefDialect>();
-  }
+    if (sourceType.getMemorySpace() && !resultType.getMemorySpace()) {
+      auto spaceCast = rewriter.create<mlir::memref::MemorySpaceCastOp>(
+          castOp.getLoc(),
+          resultType,
+          source);
+      rewriter.replaceOp(castOp, spaceCast.getResult());
+      return mlir::success();
+    }
 
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-    OpBuilder builder(module);
-
-    // Walk through all memref.alloc operations
-    module.walk([&](memref::AllocOp allocOp) {
-      // Add the local_mem attribute if it doesn't exist
-      if (!allocOp->hasAttr("local_mem")) {
-        allocOp->setAttr("local_mem", builder.getUnitAttr());
-      }
-    });
+    return mlir::failure();
   }
 };
 
-std::unique_ptr<Pass> createAddLocalMemAttributePass() {
-  return std::make_unique<AddLocalMemAttributePass>();
+struct SharedMemoryPass 
+    : public mlir::PassWrapper<SharedMemoryPass, mlir::OperationPass<mlir::ModuleOp>> {
+  
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::memref::MemRefDialect>();
+    registry.insert<mlir::scf::SCFDialect>();
+  }
+
+  void runOnOperation() override {
+    currentSharedMemoryOffset = 0;
+    
+    mlir::RewritePatternSet patterns(&getContext());
+    patterns.add<ReplaceAllocWithGlobalPattern>(&getContext());
+    patterns.add<ReplaceCastPattern>(&getContext());
+
+    if (mlir::failed(mlir::applyPatternsAndFoldGreedily(getOperation(), 
+                                                       std::move(patterns)))) {
+      signalPassFailure();
+    }
+  }
+};
+
+std::unique_ptr<mlir::Pass> createSharedMemoryGlobalPass() {
+  return std::make_unique<SharedMemoryPass>();
 }
 
-  // std::unique_ptr<Pass> createReplaceAllocAndAdjustDerivedMemRefPass() {
-  //   return std::make_unique<ReplaceAllocAndAdjustDerivedMemRefPass>();
-  // }
+} // end namespace
 
 
-
-
-} // namespace matmul_conversion
 
 int main(int argc, char **argv) {
  DialectRegistry registry;
@@ -281,7 +220,7 @@ int main(int argc, char **argv) {
       "Converts local to a more optimized form using SME",
       [](OpPassManager &pm) {
         
-       pm.addPass(matmul_conversion::createSharedMemoryAllocPass());
+       pm.addPass(matmul_conversion::createSharedMemoryGlobalPass());
         
       });
 

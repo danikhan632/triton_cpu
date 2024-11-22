@@ -30,6 +30,14 @@ def _get_triton_shared_opt_path() -> str:
     path="/home/green/code/triton-cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt"
     return path
 
+def _get_triton_local_opt_path() -> str:
+    path = os.getenv("TRITON_SHARED_OPT_PATH", "")
+    os.system("clear")
+    # if path == "":
+    #     raise Exception("TRITON_SHARED_OPT_PATH is not set.")
+    path="/home/green/code/triton-cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-local-opt/triton-local-opt"
+    return path
+
 
 def _get_llvm_bin_path(bin_name: str) -> str:
     path = os.getenv("LLVM_BINARY_DIR", "")
@@ -55,25 +63,47 @@ def _ttir_to_ttsharedir(mod):
         printc(foo)
         return foo
 
-
-def _optimize_ttsharedir(ttsharedir: str):
-    # We don't apply any optimizations now, but we can add passes if needed.
-    return ttsharedir
-
-
-def _ttsharedir_to_llir(ttsharedir: str):
+def _tensor_bufferize(ttsharedir: str) -> str:
     with tempfile.TemporaryDirectory() as tmpdir:
-        ttshared_path = os.path.join(tmpdir, "ttshared.mlir")
-        llmlir_path = os.path.join(tmpdir, "ll.mlir")
-        llir_path = os.path.join(tmpdir, "ll.ir")
-        Path(ttshared_path).write_text(ttsharedir)
+        src_path = os.path.join(tmpdir, "ttshared.mlir")
+        dst_path = os.path.join(tmpdir, "bufferized.mlir")
+        Path(src_path).write_text(ttsharedir)
+        
         mlir_opt_path = _get_llvm_bin_path("mlir-opt")
-        # TritonShared-MLIR to LLVM-MLIR
-        subprocess.check_call([mlir_opt_path, ttshared_path,
+        # First stage: Tensor bufferization
+        subprocess.check_call([mlir_opt_path, src_path,
             "--convert-linalg-to-affine-loops",
             "--eliminate-empty-tensors",
             "--empty-tensor-to-alloc-tensor",
             "--one-shot-bufferize=allow-return-allocs-from-loops=true",
+            "-o", dst_path])
+            
+        return Path(dst_path).read_text()
+
+def _optimize_local_memory(bufferized_mlir: str) -> str:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = os.path.join(tmpdir, "bufferized.mlir")
+        dst_path = os.path.join(tmpdir, "localmem.mlir")
+        Path(src_path).write_text(bufferized_mlir)
+        
+        # Second stage: Local memory optimization
+        subprocess.check_call([_get_triton_local_opt_path(), 
+            src_path, 
+            "--local-mem-conversion",
+            "-o", dst_path])
+            
+        return Path(dst_path).read_text()
+
+def _lower_to_llvm(optimized_mlir: str) -> str:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = os.path.join(tmpdir, "optimized.mlir")
+        llmlir_path = os.path.join(tmpdir, "ll.mlir")
+        llir_path = os.path.join(tmpdir, "ll.ir")
+        Path(src_path).write_text(optimized_mlir)
+        printc(Path(src_path).read_text())
+        mlir_opt_path = _get_llvm_bin_path("mlir-opt")
+        # Third stage: Lower to LLVM
+        subprocess.check_call([mlir_opt_path, src_path,
             "--lower-affine",
             "--convert-linalg-to-loops",
             "--convert-scf-to-cf",
@@ -87,23 +117,25 @@ def _ttsharedir_to_llir(ttsharedir: str):
             "--expand-strided-metadata",
             "--finalize-memref-to-llvm",
             "--convert-func-to-llvm",
-            # Lowering memrefs creates more affine.apply ops.
-            # Lowering these affine ops again creates further arith ops,
-            # so we have to run these two passes again here.
             "--lower-affine",
             "--convert-arith-to-llvm",
-            # Remove all unrealized casts created
             "--reconcile-unrealized-casts",
-            "-o",
-            llmlir_path])
-
-        # LLVM-MLIR to LLVM-IR
+            "-o", llmlir_path])
+            
+        # Convert LLVM-MLIR to LLVM-IR
         mlir_translate_path = _get_llvm_bin_path("mlir-translate")
         subprocess.check_call([mlir_translate_path, llmlir_path,
             "--mlir-to-llvmir",
-            "-o",
-            llir_path])
+            "-o", llir_path])
+            
         return Path(llir_path).read_text()
+
+def process_mlir(ttsharedir: str) -> str:
+    # Run the full pipeline
+    bufferized = _tensor_bufferize(ttsharedir)
+    optimized = _optimize_local_memory(bufferized)
+    llvm_ir = _lower_to_llvm(optimized)
+    return llvm_ir
 
 
 def _optimize_llir(llir: str):
@@ -186,10 +218,16 @@ class CPUBackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttsharedir"] = lambda src, metadata: _optimize_ttsharedir(_ttir_to_ttsharedir(src))
-        stages["llir"] = lambda src, metadata: _optimize_llir(_ttsharedir_to_llir(src))
+        
+        # Split ttsharedir into bufferize and local memory stages
+        stages["ttbufferized"] = lambda src, metadata: _tensor_bufferize(_ttir_to_ttsharedir(src))
+        stages["ttsharedir"] = lambda src, metadata: _optimize_local_memory(src)
+        
+        # Split llir into two stages
+        stages["llmlir"] = lambda src, metadata: _lower_to_llvm(src)
+        stages["llir"] = lambda src, metadata: _optimize_llir(src)
+        
         stages["cpuasm"] = lambda src, metadata: _llir_to_bin(src, metadata)
-
 
     @functools.lru_cache()
     def hash(self):
