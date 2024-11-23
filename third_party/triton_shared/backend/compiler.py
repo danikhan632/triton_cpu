@@ -39,11 +39,21 @@ def _get_triton_local_opt_path() -> str:
     return path
 
 
+def _get_triton_sme_opt_path() -> str:
+    path = os.getenv("TRITON_SHARED_OPT_PATH", "")
+    os.system("clear")
+    # if path == "":
+    #     raise Exception("TRITON_SHARED_OPT_PATH is not set.")
+    path="/home/green/code/triton-cpu/python/build/cmake.linux-x86_64-cpython-3.11/third_party/triton_shared/tools/triton-sme-opt/triton-sme-opt"
+    return path
+
+
+
 def _get_llvm_bin_path(bin_name: str) -> str:
     path = os.getenv("LLVM_BINARY_DIR", "")
     # if path == "":
     #     raise Exception("LLVM_BINARY_DIR is not set.")
-    path="/home/green/.triton/llvm/llvm-6f44bb77-ubuntu-x64/bin"
+    path="/home/green/code/triton-vortex/llvm/build/bin"
     return os.path.join(path, bin_name)
 
 
@@ -93,6 +103,23 @@ def _optimize_local_memory(bufferized_mlir: str) -> str:
             "-o", dst_path])
             
         return Path(dst_path).read_text()
+    
+    
+def _optimize_vector_memory(bufferized_mlir: str) -> str:
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = os.path.join(tmpdir, "bufferized.mlir")
+        dst_path = os.path.join(tmpdir, "shared_mem.mlir")
+        Path(src_path).write_text(bufferized_mlir)
+        
+        # Second stage: Local memory optimization
+        subprocess.check_call([_get_triton_sme_opt_path(), 
+            src_path, 
+            "--sme-conversion",
+            "-o", dst_path])
+        foo = Path(dst_path).read_text()
+        printc(foo,"magenta")
+        return foo
 
 def _lower_to_llvm(optimized_mlir: str) -> str:
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -133,7 +160,7 @@ def _lower_to_llvm(optimized_mlir: str) -> str:
 def process_mlir(ttsharedir: str) -> str:
     # Run the full pipeline
     bufferized = _tensor_bufferize(ttsharedir)
-    optimized = _optimize_local_memory(bufferized)
+    optimized = _optimize_local_memory( _optimize_vector_memory(optimized))
     llvm_ir = _lower_to_llvm(optimized)
     return llvm_ir
 
@@ -149,14 +176,33 @@ def _llir_to_bin(llir: str, metadata):
     matches = re.findall(pattern, llir)
     assert len(matches) == 1
     metadata["name"] = matches[0]
+    
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "kernel.ll")
         dst_path = os.path.join(tmpdir, "kernel.o")
         Path(src_path).write_text(llir)
+        
         llc_path = _get_llvm_bin_path("llc")
-        subprocess.check_call([llc_path, src_path, "-o", dst_path])
-        # Actually it's text-format assembly.  Use read_text().
-        return Path(dst_path).read_text()
+        
+        # Prepare the command with the provided arguments
+        llc_command = [
+            llc_path,
+            "-march=riscv32",
+            "-mattr=+m,+a,+f,+vortex,+zicond",
+            "-mcpu=generic-rv32",
+            "-mtriple=riscv32-unknown-elf",
+            src_path,
+            "-o", dst_path
+        ]
+        
+        subprocess.check_call(llc_command)
+        
+        # Read the output binary (text-format assembly)
+        foo = Path(dst_path).read_text()
+        open("kernel.s","w").write(foo)
+        printc(foo,'red')  # Assuming you want to print the assembly output in the console
+        
+        return foo
 
 
 
@@ -222,6 +268,8 @@ class CPUBackend(BaseBackend):
         # Split ttsharedir into bufferize and local memory stages
         stages["ttbufferized"] = lambda src, metadata: _tensor_bufferize(_ttir_to_ttsharedir(src))
         stages["ttsharedir"] = lambda src, metadata: _optimize_local_memory(src)
+
+  
         
         # Split llir into two stages
         stages["llmlir"] = lambda src, metadata: _lower_to_llvm(src)
