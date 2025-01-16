@@ -296,6 +296,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
+        os.system("clear")
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
         # lit is used by the test suite
